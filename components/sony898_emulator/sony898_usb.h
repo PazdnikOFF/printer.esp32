@@ -26,3 +26,9 @@ bool sony898_usb_is_configured(void);
  * Convenience: connected AND configured AND status ready AND parser idle.
  */
 bool sony898_usb_is_ready_for_print(void);
+
+/*
+ * Start the TinyUSB device task.  Call once after sony898_usb_init().
+ * The task runs tud_task() in a loop at highest priority.
+ */
+void sony898_usb_start_task(void);

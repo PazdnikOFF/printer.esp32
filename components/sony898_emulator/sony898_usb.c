@@ -20,6 +20,8 @@
 #include "tinyusb.h"
 #include "tusb.h"
 #include "device/usbd_pvt.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <string.h>
 #include <stdatomic.h>
 
@@ -285,7 +287,7 @@ static bool printer_xfer_cb(uint8_t rhport, uint8_t ep_addr,
 }
 
 static usbd_class_driver_t const _printer_driver = {
-#if CFG_TUSB_DEBUG >= 2
+#if CFG_TUSB_DEBUG >= CFG_TUD_LOG_LEVEL
     .name            = "PRINTER",
 #endif
     .init            = printer_init,
@@ -349,4 +351,17 @@ bool sony898_usb_is_ready_for_print(void) {
            sony898_usb_is_configured() &&
            sony898_status_is_ready()   &&
            sony898_parser_can_accept_job();
+}
+
+static void _usb_device_task(void *arg) {
+    (void)arg;
+    while (1) {
+        tud_task();
+        taskYIELD();
+    }
+}
+
+void sony898_usb_start_task(void) {
+    xTaskCreate(_usb_device_task, "usb", 4096, NULL,
+                configMAX_PRIORITIES - 1, NULL);
 }

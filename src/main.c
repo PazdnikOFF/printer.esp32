@@ -15,12 +15,9 @@
 #include "sony898_image.h"
 
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/uart.h"
-#include "driver/gpio.h"
-#include "tusb.h"
 #include <string.h>
 #include <stdio.h>
 #include <inttypes.h>
@@ -30,16 +27,6 @@ static const char *TAG = "main";
 #define UART_NUM     UART_NUM_0
 #define UART_BUF_SZ  512
 #define CMD_BUF_SZ   64
-
-/* ── USB task ─────────────────────────────────────────────────────────────── */
-
-static void usb_task(void *arg) {
-    (void)arg;
-    while (1) {
-        tud_task();
-        taskYIELD();
-    }
-}
 
 /* ── UART helpers ─────────────────────────────────────────────────────────── */
 
@@ -247,10 +234,9 @@ void app_main(void) {
     /* USB */
     ESP_ERROR_CHECK(sony898_usb_init());
 
-    /* Tasks */
-    xTaskCreate(usb_task,         "usb",     4096, NULL, configMAX_PRIORITIES - 1, NULL);
-    xTaskCreate(uart_task,        "uart",    4096, NULL, 5, NULL);
-    xTaskCreate(status_log_task,  "status",  3072, NULL, 4, NULL);
+    sony898_usb_start_task();
+    xTaskCreate(uart_task,       "uart",   4096, NULL, 5, NULL);
+    xTaskCreate(status_log_task, "status", 3072, NULL, 4, NULL);
 
     ESP_LOGI(TAG, "ready — connect USB cable and run: lp -d sony898 image.png");
     ESP_LOGI(TAG, "UART commands: status  dump_pgm  clear  info  usb");
