@@ -214,16 +214,20 @@ static bool printer_control_xfer_cb(uint8_t rhport, uint8_t stage,
         /* IEEE1284 Device ID: 2-byte BE length prefix + ASCII string.
          * Buffer pre-built in sony898_usb_init() — no allocation in callback. */
         uint16_t resp_len = (uint16_t)tu_min16(req->wLength, _dev_id_len);
+        ESP_LOGI(TAG, "GET_DEVICE_ID wLen=%u → %u bytes", req->wLength, resp_len);
         return tud_control_xfer(rhport, req, _dev_id_buf, resp_len);
     }
 
     case PRINTER_REQ_GET_PORT_STATUS: {
         static uint8_t port_status;
         port_status = sony898_status_get_port_status();
+        ESP_LOGI(TAG, "GET_PORT_STATUS → 0x%02X (%s)", port_status,
+                 (port_status & 0x08) ? "ready" : "fault");
         return tud_control_xfer(rhport, req, &port_status, 1);
     }
 
     case PRINTER_REQ_SOFT_RESET:
+        ESP_LOGI(TAG, "SOFT_RESET");
         sony898_parser_reset();
         return tud_control_status(rhport, req);
 
@@ -247,8 +251,8 @@ static bool printer_xfer_cb(uint8_t rhport, uint8_t ep_addr,
                  * Log it and respond with current status on Bulk IN.
                  * Exact query format not confirmed — see ТЗ §9 note.
                  */
-                ESP_LOGD(TAG, "bulk OUT %"PRIu32" bytes — not JOBSIZE, "
-                         "treating as status query (UNKNOWN format)", xferred_bytes);
+                ESP_LOGI(TAG, "bulk OUT %"PRIu32" bytes (not JOBSIZE): %.*s",
+                         xferred_bytes, (int)TU_MIN(xferred_bytes, 64u), _out_buf);
                 send_bulk_status();
             }
         }
@@ -257,6 +261,7 @@ static bool printer_xfer_cb(uint8_t rhport, uint8_t ep_addr,
 
     } else if (ep_addr == _prt.ep_in) {
         _prt.in_busy = false;
+        ESP_LOGI(TAG, "bulk IN %"PRIu32" bytes sent (in_busy cleared)", xferred_bytes);
     }
 
     return true;
