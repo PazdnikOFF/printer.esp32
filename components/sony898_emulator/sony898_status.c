@@ -1,7 +1,6 @@
 #include "sony898_status.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
 #include <stdatomic.h>
 #include <string.h>
 #include <stdio.h>
@@ -117,8 +116,14 @@ static struct {
     uint16_t scjbs;
 } _custom;
 
-/* Buffers rebuilt on demand (protected by _lock). */
-static SemaphoreHandle_t _lock;
+/*
+ * Static output buffers rebuilt on each call.  No mutex: these functions are
+ * called from TinyUSB class-driver callbacks which run in ISR or task context
+ * depending on the ESP-IDF TinyUSB port — blocking primitives must not be used.
+ * Concurrent access (e.g. UART task vs USB task) is benign: both would produce
+ * the same string for the same atomic state, and the window for a torn read is
+ * negligible vs the transfer latency.
+ */
 static char _ieee1284_buf[800];
 static char _bulk_buf[160];
 
@@ -148,8 +153,6 @@ static void get_effective_codes(uint16_t *scmde, uint8_t *scmce,
 /* ── Public API ──────────────────────────────────────────────────────────── */
 
 void sony898_status_init(void) {
-    _lock = xSemaphoreCreateMutex();
-    configASSERT(_lock);
     atomic_store(&_state, SONY898_STATE_IDLE);
     _custom.active = false;
     ESP_LOGI(TAG, "status: IDLE");
@@ -227,7 +230,6 @@ const char *sony898_status_get_ieee1284_id(void) {
     uint16_t scmde; uint8_t scmce, scsye, port_status; uint16_t scjbs;
     get_effective_codes(&scmde, &scmce, &scsye, &scjbs, &port_status);
 
-    xSemaphoreTake(_lock, portMAX_DELAY);
     snprintf(_ieee1284_buf, sizeof(_ieee1284_buf),
         "MFG:Sony;"
         "MDL:UP-D898MD_X898MD;"
@@ -251,7 +253,6 @@ const char *sony898_status_get_ieee1284_id(void) {
         "SCQTI:0001;"
         "SPUQI:0000;",
         scsye, scmde, scmce, scjbs);
-    xSemaphoreGive(_lock);
 
     return _ieee1284_buf;
 }
@@ -265,12 +266,10 @@ const char *sony898_status_get_bulk_status(void) {
      * response not confirmed.  Using confirmed field names from ТЗ §9.
      * SCPRS (print remaining) is derived from SCJBS — value not confirmed.
      */
-    xSemaphoreTake(_lock, portMAX_DELAY);
     snprintf(_bulk_buf, sizeof(_bulk_buf),
              "SCMDE=%04X\r\nSCMCE=%02X\r\nSCSYE=%02X\r\nSCJBS=%04X\r\nSCPRS=%04X\r\n",
              scmde, scmce, scsye, scjbs,
              (scjbs != 0) ? (uint16_t)0x0001 : (uint16_t)0x0000);
-    xSemaphoreGive(_lock);
 
     return _bulk_buf;
 }
