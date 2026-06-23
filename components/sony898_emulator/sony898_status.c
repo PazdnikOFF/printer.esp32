@@ -266,9 +266,14 @@ const char *sony898_status_get_bulk_status(void) {
      * response not confirmed.  Using confirmed field names from ТЗ §9.
      * SCPRS (print remaining) is derived from SCJBS — value not confirmed.
      */
+    /*
+     * 4-field format confirmed to work with Gutenprint sonyupdneo.
+     * SCPRS (print remaining) = 0x0001 when job active, 0x0000 otherwise.
+     * SCJBS is intentionally omitted — adding it breaks status parsing.
+     */
     snprintf(_bulk_buf, sizeof(_bulk_buf),
-             "SCMDE=%04X\r\nSCMCE=%02X\r\nSCSYE=%02X\r\nSCJBS=%04X\r\nSCPRS=%04X\r\n",
-             scmde, scmce, scsye, scjbs,
+             "SCMDE=%04X\r\nSCMCE=%02X\r\nSCSYE=%02X\r\nSCPRS=%04X\r\n",
+             scmde, scmce, scsye,
              (scjbs != 0) ? (uint16_t)0x0001 : (uint16_t)0x0000);
 
     return _bulk_buf;
