@@ -105,37 +105,12 @@ static char const *_desc_strings[] = {
     "0000000",                         /* 3: Serial (ТЗ §3) */
 };
 
-/* ── TinyUSB descriptor callbacks ────────────────────────────────────────── */
-
-uint8_t const *tud_descriptor_device_cb(void) {
-    return (uint8_t const *)&_desc_device;
-}
-
-uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
-    (void)index;
-    return _desc_config;
-}
-
-uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
-    (void)langid;
-    static uint16_t _str[64];
-
-    uint8_t chr_count;
-    if (index == 0) {
-        memcpy(&_str[1], _desc_strings[0], 2);
-        chr_count = 1;
-    } else {
-        if (index >= TU_ARRAY_SIZE(_desc_strings)) return NULL;
-        const char *s = _desc_strings[index];
-        chr_count = (uint8_t)strlen(s);
-        if (chr_count > 63) chr_count = 63;
-        for (uint8_t i = 0; i < chr_count; i++) {
-            _str[1 + i] = s[i];
-        }
-    }
-    _str[0] = (uint16_t)((TUSB_DESC_STRING << 8) | (2 * chr_count + 2));
-    return _str;
-}
+/*
+ * tud_descriptor_device_cb / tud_descriptor_configuration_cb /
+ * tud_descriptor_string_cb are NOT defined here.
+ * esp_tinyusb (descriptors_control.c) provides them and reads the
+ * descriptors from the tinyusb_config_t passed to tinyusb_driver_install().
+ */
 
 /* ── Connection/configuration state callbacks ────────────────────────────── */
 
