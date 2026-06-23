@@ -43,7 +43,6 @@ static const char *TAG = "sony898_usb";
 static uint8_t _out_buf[512] __attribute__((aligned(4)));
 static uint8_t _in_buf[512]  __attribute__((aligned(4)));
 static uint8_t _dev_id_buf[512] __attribute__((aligned(4)));
-static uint16_t _dev_id_len;
 
 /* ── Connection state tracked via TinyUSB callbacks ──────────────────────── */
 static volatile atomic_bool _connected  = false;
@@ -211,8 +210,16 @@ static bool printer_control_xfer_cb(uint8_t rhport, uint8_t stage,
     switch (req->bRequest) {
 
     case PRINTER_REQ_GET_DEVICE_ID: {
-        /* IEEE1284 Device ID: 2-byte BE length prefix + ASCII string */
-        uint16_t resp_len = (uint16_t)tu_min16(req->wLength, _dev_id_len);
+        /* IEEE1284 Device ID: 2-byte BE length prefix + ASCII string.
+         * Rebuilt on every request so error fields reflect current state. */
+        const char *id_str = sony898_status_get_ieee1284_id();
+        size_t str_len = strlen(id_str);
+        if (str_len > sizeof(_dev_id_buf) - 2) str_len = sizeof(_dev_id_buf) - 2;
+        uint16_t total = (uint16_t)(str_len + 2);
+        _dev_id_buf[0] = (uint8_t)(total >> 8);
+        _dev_id_buf[1] = (uint8_t)(total & 0xFF);
+        memcpy(_dev_id_buf + 2, id_str, str_len);
+        uint16_t resp_len = (uint16_t)tu_min16(req->wLength, total);
         return tud_control_xfer(rhport, req, _dev_id_buf, resp_len);
     }
 
@@ -282,15 +289,6 @@ usbd_class_driver_t const *usbd_app_driver_get_cb(uint8_t *driver_count) {
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
 esp_err_t sony898_usb_init(void) {
-    /* Build Device ID buffer with 2-byte BE length prefix. */
-    const char *id_str = sony898_status_get_ieee1284_id();
-    size_t str_len = strlen(id_str);
-    uint16_t total = (uint16_t)(str_len + 2);
-    _dev_id_buf[0] = (uint8_t)(total >> 8);
-    _dev_id_buf[1] = (uint8_t)(total & 0xFF);
-    memcpy(_dev_id_buf + 2, id_str, str_len);
-    _dev_id_len = total;
-
     tinyusb_config_t cfg = {
         .device_descriptor       = &_desc_device,
         .string_descriptor       = _desc_strings,

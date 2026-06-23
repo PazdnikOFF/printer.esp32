@@ -1,5 +1,6 @@
 #include "sony898_parser.h"
 #include "sony898_image.h"
+#include "sony898_status.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -74,6 +75,7 @@ static void reset_locked(void) {
     _ctx.width         = 0;
     _ctx.height        = 0;
     _ctx.image_written = 0;
+    sony898_status_set_state(SONY898_STATE_IDLE);
 }
 
 /* ── JOBSIZE block parser ────────────────────────────────────────────────── */
@@ -100,6 +102,7 @@ static void handle_jobsize(void) {
         _ctx.block_remaining = _ctx.pjl_h_len;
         _ctx.scan_pos = 0;
         _ctx.state = PARSER_READ_PJL_HEADER;
+        sony898_status_set_state(SONY898_STATE_RECEIVING_JOB);
 
     } else if (_ctx.state == PARSER_WAIT_JOBSIZE_PDL) {
         if (strncmp(p, "PDL,", 4) != 0) {
@@ -307,6 +310,7 @@ static esp_err_t feed_locked(const uint8_t *data, size_t len) {
                 }
                 sony898_image_mark_ready();
                 ESP_LOGI(TAG, "image_ready = 1");
+                sony898_status_set_state(SONY898_STATE_JOB_DONE);
                 _ctx.state = PARSER_JOB_COMPLETE;
             }
             break;

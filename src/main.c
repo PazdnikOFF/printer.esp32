@@ -2,11 +2,14 @@
  * Demo: Sony UP-D898MD_X898MD USB printer emulator on ESP32-S3-N16R8.
  *
  * UART commands (115200 8N1):
- *   status    — parser state, image info, checksum
- *   dump_pgm  — emit raw PGM binary to UART (capture with e.g. minicom -b 115200 -C out.pgm)
- *   clear     — release image buffer, reset parser
- *   info      — device identity
- *   usb       — USB connection/configuration state
+ *   status                   — printer state, parser state, image info
+ *   device_id                — current IEEE1284 Device ID string
+ *   set <state>              — force printer state (idle / printing / cover_open /
+ *                              no_paper / no_ribbon / no_media / media_mismatch / error)
+ *   dump_pgm                 — emit raw PGM binary to UART
+ *   clear                    — release image buffer, reset parser
+ *   info                     — USB device identity
+ *   usb                      — USB connection/configuration state
  */
 
 #include "sony898_usb.h"
@@ -59,7 +62,16 @@ static const char *state_name(parser_state_t s) {
 
 static void cmd_status(void) {
     char buf[128];
-    snprintf(buf, sizeof(buf), "state: %s\r\n",
+
+    snprintf(buf, sizeof(buf), "printer_state: %s\r\n",
+             sony898_status_state_name(sony898_status_get_state()));
+    uart_puts(buf);
+    snprintf(buf, sizeof(buf), "is_ready: %d  port_status: 0x%02X\r\n",
+             (int)sony898_status_is_ready(),
+             sony898_status_get_port_status());
+    uart_puts(buf);
+
+    snprintf(buf, sizeof(buf), "parser: %s\r\n",
              state_name(sony898_parser_get_state()));
     uart_puts(buf);
 
@@ -78,7 +90,6 @@ static void cmd_status(void) {
                  sony898_get_image_size());
         uart_puts(buf);
 
-        /* compute checksum */
         const uint8_t *img = sony898_get_image_buffer();
         uint32_t sum = 0;
         size_t sz = sony898_get_image_size();
@@ -86,6 +97,32 @@ static void cmd_status(void) {
         snprintf(buf, sizeof(buf), "checksum: 0x%08"PRIX32"\r\n", sum);
         uart_puts(buf);
     }
+}
+
+static void cmd_device_id(void) {
+    uart_putline(sony898_status_get_ieee1284_id());
+}
+
+static void cmd_set_state(const char *arg) {
+    sony898_state_t s;
+    if      (strcmp(arg, "idle")           == 0) s = SONY898_STATE_IDLE;
+    else if (strcmp(arg, "printing")       == 0) s = SONY898_STATE_PRINTING;
+    else if (strcmp(arg, "cover_open")     == 0) s = SONY898_STATE_COVER_OPEN;
+    else if (strcmp(arg, "no_paper")       == 0) s = SONY898_STATE_NO_PAPER;
+    else if (strcmp(arg, "no_ribbon")      == 0) s = SONY898_STATE_NO_RIBBON;
+    else if (strcmp(arg, "no_media")       == 0) s = SONY898_STATE_NO_MEDIA;
+    else if (strcmp(arg, "media_mismatch") == 0) s = SONY898_STATE_MEDIA_MISMATCH;
+    else if (strcmp(arg, "error")          == 0) s = SONY898_STATE_SYSTEM_ERROR;
+    else {
+        uart_puts("unknown state: ");
+        uart_putline(arg);
+        uart_putline("states: idle printing cover_open no_paper no_ribbon"
+                     " no_media media_mismatch error");
+        return;
+    }
+    sony898_status_set_state(s);
+    uart_puts("state → ");
+    uart_putline(sony898_status_state_name(s));
 }
 
 static void cmd_dump_pgm(void) {
@@ -161,15 +198,19 @@ static void uart_task(void *arg) {
             cmd_len = 0;
             uart_puts("\r\n");
 
-            if      (strcmp(cmd, "status")   == 0) cmd_status();
-            else if (strcmp(cmd, "dump_pgm") == 0) cmd_dump_pgm();
-            else if (strcmp(cmd, "clear")    == 0) cmd_clear();
-            else if (strcmp(cmd, "info")     == 0) cmd_info();
-            else if (strcmp(cmd, "usb")      == 0) cmd_usb();
+            if      (strcmp(cmd, "status")    == 0) cmd_status();
+            else if (strcmp(cmd, "dump_pgm")  == 0) cmd_dump_pgm();
+            else if (strcmp(cmd, "clear")     == 0) cmd_clear();
+            else if (strcmp(cmd, "info")      == 0) cmd_info();
+            else if (strcmp(cmd, "usb")       == 0) cmd_usb();
+            else if (strcmp(cmd, "device_id") == 0) cmd_device_id();
+            else if (strncmp(cmd, "set ", 4)  == 0) cmd_set_state(cmd + 4);
             else {
                 uart_puts("unknown command: ");
                 uart_putline(cmd);
-                uart_putline("commands: status dump_pgm clear info usb");
+                uart_putline("commands: status dump_pgm clear info usb device_id");
+                uart_putline("          set idle|printing|cover_open|no_paper|"
+                             "no_ribbon|no_media|media_mismatch|error");
             }
         } else if (ch == 0x08 || ch == 0x7F) {
             /* backspace */
@@ -239,5 +280,5 @@ void app_main(void) {
     xTaskCreate(status_log_task, "status", 3072, NULL, 4, NULL);
 
     ESP_LOGI(TAG, "ready — connect USB cable and run: lp -d sony898 image.png");
-    ESP_LOGI(TAG, "UART commands: status  dump_pgm  clear  info  usb");
+    ESP_LOGI(TAG, "UART commands: status  device_id  set <state>  dump_pgm  clear  info  usb");
 }
