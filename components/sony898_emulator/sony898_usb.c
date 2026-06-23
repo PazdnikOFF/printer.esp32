@@ -144,7 +144,12 @@ static void send_bulk_status(void) {
     if (len > sizeof(_in_buf)) len = sizeof(_in_buf);
     memcpy(_in_buf, s, len);
     _prt.in_busy = true;
-    usbd_edpt_xfer(TUD_OPT_RHPORT, _prt.ep_in, _in_buf, (uint16_t)len);
+    if (!usbd_edpt_xfer(TUD_OPT_RHPORT, _prt.ep_in, _in_buf, (uint16_t)len)) {
+        ESP_LOGE(TAG, "bulk IN queue failed (ep=0x%02x len=%u)", _prt.ep_in, (unsigned)len);
+        _prt.in_busy = false;
+    } else {
+        ESP_LOGI(TAG, "bulk IN queued: %.*s", (int)len, _in_buf);
+    }
 }
 
 /* ── Custom Printer class driver ─────────────────────────────────────────── */
