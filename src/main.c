@@ -327,7 +327,11 @@ static void status_log_task(void *arg) {
             job_done_at    = 0;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(500));
+        /* Poll faster when waiting for print dispatch or completion signal. */
+        TickType_t delay = (pstate == SONY898_STATE_PRINTING)
+                           ? pdMS_TO_TICKS(50)
+                           : pdMS_TO_TICKS(500);
+        vTaskDelay(delay);
     }
 }
 

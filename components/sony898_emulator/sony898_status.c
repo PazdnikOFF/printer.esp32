@@ -112,15 +112,18 @@ static struct {
 } _custom;
 
 /*
- * Static output buffers rebuilt on each call.  No mutex: these functions are
- * called from TinyUSB class-driver callbacks which run in ISR or task context
- * depending on the ESP-IDF TinyUSB port — blocking primitives must not be used.
- * Concurrent access (e.g. UART task vs USB task) is benign: both would produce
- * the same string for the same atomic state, and the window for a torn read is
- * negligible vs the transfer latency.
+ * Pre-built response buffers — rebuilt only on state change, not on every query.
+ * GET_DEVICE_ID and bulk IN are polled frequently by the host; snprintf on each
+ * call adds unnecessary load to the USB callback path.
+ *
+ * Thread safety: rebuilt in set_state() which may race with USB callbacks reading
+ * the buffers.  The worst case is one stale response during a state transition —
+ * acceptable since the host re-polls within milliseconds.
  */
-static char _ieee1284_buf[800];
-static char _bulk_buf[160];
+static char   _ieee1284_buf[800];
+static size_t _ieee1284_len;
+static char   _bulk_buf[160];
+static size_t _bulk_len;
 
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
 
@@ -142,50 +145,14 @@ static void get_effective_codes(uint16_t *scmde, uint8_t *scmce,
         *scsye = row->scsye;
         *scjbs = row->scjbs;
     }
-    *port_status = row->port_status; /* always from table, not overridable */
+    *port_status = row->port_status;
 }
 
-/* ── Public API ──────────────────────────────────────────────────────────── */
-
-void sony898_status_init(void) {
-    atomic_store(&_state, SONY898_STATE_IDLE);
-    _custom.active = false;
-    ESP_LOGI(TAG, "status: IDLE");
-}
-
-sony898_state_t sony898_status_get_state(void) {
-    return atomic_load(&_state);
-}
-
-void sony898_status_set_state(sony898_state_t state) {
-    if (state >= SONY898_STATE__COUNT) return;
-    _custom.active = false;
-    atomic_store(&_state, state);
-    ESP_LOGI(TAG, "state → %s", _state_names[state]);
-}
-
-const char *sony898_status_state_name(sony898_state_t state) {
-    if (state >= SONY898_STATE__COUNT) return "?";
-    return _state_names[state];
-}
-
-esp_err_t sony898_status_set_custom_fields(uint16_t scmde, uint8_t scmce,
-                                            uint8_t scsye, uint16_t scjbs) {
-    _custom.scmde  = scmde;
-    _custom.scmce  = scmce;
-    _custom.scsye  = scsye;
-    _custom.scjbs  = scjbs;
-    _custom.active = true;
-    ESP_LOGI(TAG, "custom fields: SCMDE=%04X SCMCE=%02X SCSYE=%02X SCJBS=%04X",
-             scmde, scmce, scsye, scjbs);
-    return ESP_OK;
-}
-
-const char *sony898_status_get_ieee1284_id(void) {
+static void rebuild_cache(void) {
     uint16_t scmde; uint8_t scmce, scsye, port_status; uint16_t scjbs;
     get_effective_codes(&scmde, &scmce, &scsye, &scjbs, &port_status);
 
-    snprintf(_ieee1284_buf, sizeof(_ieee1284_buf),
+    _ieee1284_len = (size_t)snprintf(_ieee1284_buf, sizeof(_ieee1284_buf),
         "MFG:"   CFG_DEV_MFG   ";"
         "MDL:"   CFG_DEV_MDL   ";"
         "DES:"   CFG_DEV_DES   ";"
@@ -209,29 +176,65 @@ const char *sony898_status_get_ieee1284_id(void) {
         "SPUQI:" CFG_DEV_SPUQI ";",
         scsye, scmde, scmce, scjbs);
 
+    _bulk_len = (size_t)snprintf(_bulk_buf, sizeof(_bulk_buf),
+        "SCMDE=%04X\r\nSCMCE=%02X\r\nSCSYE=%02X\r\nSCPRS=%04X\r\n",
+        scmde, scmce, scsye,
+        (scjbs != 0) ? (uint16_t)0x0001 : (uint16_t)0x0000);
+}
+
+/* ── Public API ──────────────────────────────────────────────────────────── */
+
+void sony898_status_init(void) {
+    atomic_store(&_state, SONY898_STATE_IDLE);
+    _custom.active = false;
+    rebuild_cache();
+    ESP_LOGI(TAG, "status: IDLE");
+}
+
+sony898_state_t sony898_status_get_state(void) {
+    return atomic_load(&_state);
+}
+
+void sony898_status_set_state(sony898_state_t state) {
+    if (state >= SONY898_STATE__COUNT) return;
+    _custom.active = false;
+    atomic_store(&_state, state);
+    rebuild_cache();
+    ESP_LOGI(TAG, "state → %s", _state_names[state]);
+}
+
+const char *sony898_status_state_name(sony898_state_t state) {
+    if (state >= SONY898_STATE__COUNT) return "?";
+    return _state_names[state];
+}
+
+esp_err_t sony898_status_set_custom_fields(uint16_t scmde, uint8_t scmce,
+                                            uint8_t scsye, uint16_t scjbs) {
+    _custom.scmde  = scmde;
+    _custom.scmce  = scmce;
+    _custom.scsye  = scsye;
+    _custom.scjbs  = scjbs;
+    _custom.active = true;
+    rebuild_cache();
+    ESP_LOGI(TAG, "custom fields: SCMDE=%04X SCMCE=%02X SCSYE=%02X SCJBS=%04X",
+             scmde, scmce, scsye, scjbs);
+    return ESP_OK;
+}
+
+const char *sony898_status_get_ieee1284_id(void) {
     return _ieee1284_buf;
 }
 
+size_t sony898_status_get_ieee1284_len(void) {
+    return _ieee1284_len;
+}
+
 const char *sony898_status_get_bulk_status(void) {
-    uint16_t scmde; uint8_t scmce, scsye, port_status; uint16_t scjbs;
-    get_effective_codes(&scmde, &scmce, &scsye, &scjbs, &port_status);
-
-    /*
-     * UNKNOWN: exact framing for the Gutenprint sonyupdneo bulk-IN status
-     * response not confirmed.  Using confirmed field names from ТЗ §9.
-     * SCPRS (print remaining) is derived from SCJBS — value not confirmed.
-     */
-    /*
-     * 4-field format confirmed to work with Gutenprint sonyupdneo.
-     * SCPRS (print remaining) = 0x0001 when job active, 0x0000 otherwise.
-     * SCJBS is intentionally omitted — adding it breaks status parsing.
-     */
-    snprintf(_bulk_buf, sizeof(_bulk_buf),
-             "SCMDE=%04X\r\nSCMCE=%02X\r\nSCSYE=%02X\r\nSCPRS=%04X\r\n",
-             scmde, scmce, scsye,
-             (scjbs != 0) ? (uint16_t)0x0001 : (uint16_t)0x0000);
-
     return _bulk_buf;
+}
+
+size_t sony898_status_get_bulk_len(void) {
+    return _bulk_len;
 }
 
 uint8_t sony898_status_get_port_status(void) {

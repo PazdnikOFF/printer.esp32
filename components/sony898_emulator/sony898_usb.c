@@ -179,16 +179,15 @@ void tud_resume_cb(void) {
 
 static void send_bulk_status(void) {
     if (!_prt.open || _prt.in_busy) return;
-    const char *s = sony898_status_get_bulk_status();
-    size_t len = strlen(s);
+    size_t len = sony898_status_get_bulk_len();
     if (len > sizeof(_in_buf)) len = sizeof(_in_buf);
-    memcpy(_in_buf, s, len);
+    memcpy(_in_buf, sony898_status_get_bulk_status(), len);
     _prt.in_busy = true;
     if (!usbd_edpt_xfer(TUD_OPT_RHPORT, _prt.ep_in, _in_buf, (uint16_t)len)) {
         ESP_LOGE(TAG, "bulk IN queue failed (ep=0x%02x len=%u)", _prt.ep_in, (unsigned)len);
         _prt.in_busy = false;
     } else {
-        ESP_LOGD(TAG, "bulk IN queued: %.*s", (int)len, _in_buf);
+        ESP_LOGD(TAG, "bulk IN queued %u bytes", (unsigned)len);
     }
 }
 
@@ -256,15 +255,12 @@ static bool printer_control_xfer_cb(uint8_t rhport, uint8_t stage,
     switch (req->bRequest) {
 
     case PRINTER_REQ_GET_DEVICE_ID: {
-        /* Rebuild on every call so dynamic fields (SCMDE/SCMCE/SCSYE/SCJBS)
-         * reflect the current printer state — the host uses this for status polling. */
-        const char *id_str = sony898_status_get_ieee1284_id();
-        size_t str_len = strlen(id_str);
+        size_t str_len = sony898_status_get_ieee1284_len();
         if (str_len > sizeof(_dev_id_buf) - 2) str_len = sizeof(_dev_id_buf) - 2;
         uint16_t total = (uint16_t)(str_len + 2);
         _dev_id_buf[0] = (uint8_t)(total >> 8);
         _dev_id_buf[1] = (uint8_t)(total & 0xFF);
-        memcpy(_dev_id_buf + 2, id_str, str_len);
+        memcpy(_dev_id_buf + 2, sony898_status_get_ieee1284_id(), str_len);
         uint16_t resp_len = tu_min16(req->wLength, total);
         ESP_LOGD(TAG, "GET_DEVICE_ID → %u bytes", resp_len);
         return tud_control_xfer(rhport, req, _dev_id_buf, resp_len);

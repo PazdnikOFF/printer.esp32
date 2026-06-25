@@ -48,15 +48,15 @@ esp_err_t sony898_status_set_custom_fields(
 
 /* ── Accessors used by the USB layer ─────────────────────────────────────── */
 
-/* IEEE1284 Device ID string for current state (no length prefix). */
+/* IEEE1284 Device ID string for current state (no length prefix).
+ * Pre-built on state change — safe to call from USB callback path. */
 const char *sony898_status_get_ieee1284_id(void);
+size_t      sony898_status_get_ieee1284_len(void);
 
-/*
- * Bulk IN status response for current state.
- * UNKNOWN: exact framing expected by Gutenprint not confirmed.
- * Fields: SCMDE, SCMCE, SCSYE, SCJBS, SCPRS from ТЗ §9.
- */
+/* Bulk IN status response for current state.
+ * Pre-built on state change — safe to call from USB callback path. */
 const char *sony898_status_get_bulk_status(void);
+size_t      sony898_status_get_bulk_len(void);
 
 /* 1-byte USB Printer Class port status for current state. */
 uint8_t sony898_status_get_port_status(void);
