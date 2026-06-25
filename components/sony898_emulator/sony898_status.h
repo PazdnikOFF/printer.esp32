@@ -26,7 +26,8 @@ typedef enum {
 } sony898_state_t;
 
 /* ── Module init ─────────────────────────────────────────────────────────── */
-void sony898_status_init(void);
+/* serial — per-unit serial number for the IEEE1284 SCSNO field. */
+void sony898_status_init(const char *serial);
 
 /* ── State get/set ───────────────────────────────────────────────────────── */
 sony898_state_t sony898_status_get_state(void);

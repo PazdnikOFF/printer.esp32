@@ -4,9 +4,10 @@
 
 /*
  * Initialize TinyUSB as Sony UP-D898MD_X898MD USB printer.
- * Call once at startup before any other sony898_* functions.
+ * serial — per-unit serial number string used in iSerial USB descriptor.
+ * Call once at startup (via sony898_emulator_init).
  */
-esp_err_t sony898_usb_init(void);
+esp_err_t sony898_usb_init(const char *serial);
 
 /*
  * Returns true if ESP32-S3 USB Device has been seen by a USB host

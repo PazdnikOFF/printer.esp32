@@ -1,31 +1,40 @@
 /*
  * Sony UP-D898MD_X898MD USB printer emulator — application entry point.
  *
- * This module receives print jobs from a USB host (Linux/CUPS + Gutenprint),
- * parses SPJL-DS / SPDL-DS2, stores the grayscale image in PSRAM, and
- * exposes it to the thermal print module via sony898_printer_iface.h.
+ * ── Module wiring ────────────────────────────────────────────────────────────
  *
- * ── Module wiring (in app_main) ──────────────────────────────────────────────
+ *   sony898_config_t cfg = {0};
+ *   cfg.on_job_ready = thermal_printer_on_job_ready;   // from print module
+ *   sony898_emulator_init(&cfg);
+ *   sony898_emulator_start();
  *
- *   [USB host] → sony898_emulator → on_job_ready_cb → [thermal print module]
- *                                                             │
- *   sony898_sensor_set_*(...)  ←──────────────────── GPIO sensors
- *   sony898_printer_notify_done() ←──────────────── print complete signal
+ * ── Sensor updates (from GPIO handlers or print module task) ─────────────────
+ *
+ *   sony898_sensor_set_paper(gpio_get_level(PIN_PAPER));
+ *   sony898_sensor_set_cover(gpio_get_level(PIN_COVER));
+ *   sony898_sensor_set_ribbon(gpio_get_level(PIN_RIBBON));
+ *   sony898_sensor_set_media_match(media_ok);
+ *   sony898_sensor_set_system_error(hw_fault);
+ *
+ * ── Print completion (from print module task) ─────────────────────────────────
+ *
+ *   sony898_printer_notify_done();    // success
+ *   sony898_printer_notify_error();   // hardware fault
  *
  * ── UART service commands (115200 8N1) ───────────────────────────────────────
- *   status      — printer state, parser state, image info
- *   device_id   — current IEEE1284 Device ID string
- *   usb         — USB connection / configuration state
- *   counter     — total print count (NVS-persistent)
- *   dump_pgm    — emit raw PGM binary over UART
- *   clear       — release image buffer, reset parser
- *   info        — USB device identity
- *   set <state> — force printer state for testing:
- *                   idle / receiving_job / printing / job_done /
- *                   cover_open / no_paper / no_ribbon / no_media /
- *                   media_mismatch / error
+ *   status              — printer / parser / image state
+ *   device_id           — current IEEE1284 Device ID string
+ *   usb                 — USB connection state
+ *   serial              — active serial number
+ *   counter             — total print count (NVS-persistent)
+ *   dump_pgm            — emit raw PGM image over UART
+ *   clear               — release image buffer, reset parser
+ *   info                — USB device identity
+ *   set_serial <value>  — write serial to NVS (factory command, reboot to apply)
+ *   set <state>         — force printer state for testing
  */
 
+#include "sony898_emulator.h"
 #include "sony898_usb.h"
 #include "sony898_parser.h"
 #include "sony898_status.h"
@@ -119,14 +128,31 @@ static void cmd_device_id(void) {
 
 static void cmd_usb(void) {
     char buf[64];
-    snprintf(buf, sizeof(buf), "connected     : %d\r\n", (int)sony898_usb_is_connected());
+    snprintf(buf, sizeof(buf), "connected      : %d\r\n", (int)sony898_usb_is_connected());
     uart_puts(buf);
-    snprintf(buf, sizeof(buf), "configured    : %d\r\n", (int)sony898_usb_is_configured());
+    snprintf(buf, sizeof(buf), "configured     : %d\r\n", (int)sony898_usb_is_configured());
     uart_puts(buf);
     snprintf(buf, sizeof(buf), "ready_for_print: %d\r\n", (int)sony898_usb_is_ready_for_print());
     uart_puts(buf);
-    snprintf(buf, sizeof(buf), "image_ready   : %d\r\n", (int)sony898_image_ready());
-    uart_puts(buf);
+}
+
+static void cmd_serial(void) {
+    uart_puts("serial: ");
+    uart_putline(sony898_emulator_get_serial());
+}
+
+static void cmd_set_serial(const char *arg) {
+    if (!arg || !arg[0]) {
+        uart_putline("usage: set_serial <value>  (max 16 chars)");
+        return;
+    }
+    esp_err_t r = sony898_emulator_set_serial(arg);
+    if (r == ESP_OK) {
+        uart_puts("OK: serial saved — reboot to apply: ");
+        uart_putline(arg);
+    } else {
+        uart_putline("ERROR: NVS write failed");
+    }
 }
 
 static void cmd_counter(void) {
@@ -136,10 +162,13 @@ static void cmd_counter(void) {
 }
 
 static void cmd_info(void) {
+    char buf[64];
     uart_putline("VID          : 054C");
     uart_putline("PID          : 0877");
     uart_putline("Manufacturer : Sony");
     uart_putline("Product      : UP-D898MD_X898MD");
+    snprintf(buf, sizeof(buf), "Serial       : %s\r\n", sony898_emulator_get_serial());
+    uart_puts(buf);
     uart_putline("Class        : 7/1/2 Printer Bidirectional");
     uart_putline("Protocol     : SPJL-DS, SPDL-DS2");
 }
@@ -173,7 +202,6 @@ static void cmd_clear(void) {
     uart_putline("OK: image cleared, parser reset");
 }
 
-/* Force printer state — for testing only, bypasses sensor logic. */
 static void cmd_set_state(const char *arg) {
     sony898_state_t s;
     if      (strcmp(arg, "idle")           == 0) s = SONY898_STATE_IDLE;
@@ -214,18 +242,20 @@ static void uart_task(void *arg) {
             cmd_len = 0;
             uart_puts("\r\n");
 
-            if      (strcmp(cmd, "status")    == 0) cmd_status();
-            else if (strcmp(cmd, "device_id") == 0) cmd_device_id();
-            else if (strcmp(cmd, "usb")       == 0) cmd_usb();
-            else if (strcmp(cmd, "counter")   == 0) cmd_counter();
-            else if (strcmp(cmd, "dump_pgm")  == 0) cmd_dump_pgm();
-            else if (strcmp(cmd, "clear")     == 0) cmd_clear();
-            else if (strcmp(cmd, "info")      == 0) cmd_info();
-            else if (strncmp(cmd, "set ", 4)  == 0) cmd_set_state(cmd + 4);
+            if      (strcmp(cmd, "status")        == 0) cmd_status();
+            else if (strcmp(cmd, "device_id")     == 0) cmd_device_id();
+            else if (strcmp(cmd, "usb")           == 0) cmd_usb();
+            else if (strcmp(cmd, "serial")        == 0) cmd_serial();
+            else if (strcmp(cmd, "counter")       == 0) cmd_counter();
+            else if (strcmp(cmd, "dump_pgm")      == 0) cmd_dump_pgm();
+            else if (strcmp(cmd, "clear")         == 0) cmd_clear();
+            else if (strcmp(cmd, "info")          == 0) cmd_info();
+            else if (strncmp(cmd, "set_serial ", 11) == 0) cmd_set_serial(cmd + 11);
+            else if (strncmp(cmd, "set ", 4)         == 0) cmd_set_state(cmd + 4);
             else {
                 uart_puts("unknown: "); uart_putline(cmd);
-                uart_putline("commands: status | device_id | usb | counter |"
-                             " dump_pgm | clear | info | set <state>");
+                uart_putline("commands: status | device_id | usb | serial | counter |"
+                             " dump_pgm | clear | info | set_serial <v> | set <state>");
             }
         } else if ((ch == 0x08 || ch == 0x7F) && cmd_len > 0) {
             cmd_len--;
@@ -261,7 +291,6 @@ static void status_log_task(void *arg) {
         }
 
         bool ready = sony898_image_ready();
-
         if (ready && !last_ready) {
             ESP_LOGI(TAG, "image_ready  %"PRIu16"x%"PRIu16"  %zu B  copies=%u",
                      sony898_get_width(), sony898_get_height(),
@@ -286,7 +315,6 @@ static void status_log_task(void *arg) {
                     };
                     sony898_printer_iface_dispatch(&job);
                 } else {
-                    /* Fallback: simulate print time from image height */
                     printing_since = xTaskGetTickCount();
                     uint16_t h = sony898_get_height();
                     if (h == 0) h = 960;
@@ -327,7 +355,6 @@ static void status_log_task(void *arg) {
             job_done_at    = 0;
         }
 
-        /* Poll faster when waiting for print dispatch or completion signal. */
         TickType_t delay = (pstate == SONY898_STATE_PRINTING)
                            ? pdMS_TO_TICKS(50)
                            : pdMS_TO_TICKS(500);
@@ -335,20 +362,19 @@ static void status_log_task(void *arg) {
     }
 }
 
-/* ── Print module API hooks ──────────────────────────────────────────────────
+/* ── Print module wiring ─────────────────────────────────────────────────────
  *
- * Place print module init and sensor binding here.
- * The thermal print module (separate component) must:
+ * Register the thermal print module callback and any USB event handlers here.
+ * The thermal module (separate component) must:
  *
- *   1. Register its job callback:
- *        sony898_printer_iface_set_callback(thermal_on_job_ready);
+ *   1. cfg->on_job_ready = thermal_printer_on_job_ready;
  *
  *   2. Report sensor states from GPIO handlers / its own task:
- *        sony898_sensor_set_paper(gpio_get_level(PIN_PAPER_SENSOR));
- *        sony898_sensor_set_cover(gpio_get_level(PIN_COVER_SENSOR));
- *        sony898_sensor_set_ribbon(gpio_get_level(PIN_RIBBON_SENSOR));
- *        sony898_sensor_set_media_match(media_type_matches_job());
- *        sony898_sensor_set_system_error(hw_fault_detected());
+ *        sony898_sensor_set_paper(gpio_get_level(PIN_PAPER));
+ *        sony898_sensor_set_cover(gpio_get_level(PIN_COVER));
+ *        sony898_sensor_set_ribbon(gpio_get_level(PIN_RIBBON));
+ *        sony898_sensor_set_media_match(media_ok);
+ *        sony898_sensor_set_system_error(hw_fault);
  *
  *   3. Signal completion from its print task:
  *        sony898_printer_notify_done();   // success
@@ -356,12 +382,11 @@ static void status_log_task(void *arg) {
  *
  * ─────────────────────────────────────────────────────────────────────────────*/
 
-static void printer_module_init(void) {
-    /* TODO: replace with real thermal print module init
-     *
-     * Example:
+static void printer_module_init(sony898_config_t *cfg) {
+    (void)cfg;
+    /* TODO: wire thermal print module
      *   thermal_printer_init();
-     *   sony898_printer_iface_set_callback(thermal_printer_on_job_ready);
+     *   cfg->on_job_ready = thermal_printer_on_job_ready;
      */
 }
 
@@ -370,7 +395,6 @@ static void printer_module_init(void) {
 void app_main(void) {
     ESP_LOGI(TAG, "Sony UP-D898MD_X898MD emulator starting");
 
-    /* NVS — required for print counter */
     esp_err_t nvs_ret = nvs_flash_init();
     if (nvs_ret == ESP_ERR_NVS_NO_FREE_PAGES ||
         nvs_ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -378,7 +402,6 @@ void app_main(void) {
         nvs_flash_init();
     }
 
-    /* UART service interface */
     uart_config_t uart_cfg = {
         .baud_rate  = 115200,
         .data_bits  = UART_DATA_8_BITS,
@@ -389,24 +412,22 @@ void app_main(void) {
     ESP_ERROR_CHECK(uart_driver_install(UART_NUM, UART_BUF_SZ * 2, 0, 0, NULL, 0));
     ESP_ERROR_CHECK(uart_param_config(UART_NUM, &uart_cfg));
 
-    /* Core modules */
-    sony898_image_init();
-    sony898_parser_init();
-    sony898_status_init();
-    sony898_sensor_init();
-    sony898_counter_init();
+    sony898_config_t cfg = {
+        .serial        = NULL,   /* load from NVS; program with: set_serial <value> */
+        .on_job_ready  = NULL,
+        .on_connect    = NULL,
+        .on_disconnect = NULL,
+    };
+    printer_module_init(&cfg);
 
-    /* Thermal print module — registers callback and GPIO sensor bindings */
-    printer_module_init();
+    ESP_ERROR_CHECK(sony898_emulator_init(&cfg));
 
-    /* USB device */
-    ESP_ERROR_CHECK(sony898_usb_init());
-    sony898_usb_start_task();
-
-    /* Tasks */
     xTaskCreate(uart_task,       "uart",   4096, NULL, 5, NULL);
     xTaskCreate(status_log_task, "status", 3072, NULL, 4, NULL);
 
-    ESP_LOGI(TAG, "ready — UART: status | device_id | usb | counter | "
-             "dump_pgm | clear | info | set <state>");
+    sony898_emulator_start();
+
+    ESP_LOGI(TAG, "ready — serial: %s", sony898_emulator_get_serial());
+    ESP_LOGI(TAG, "UART: status | device_id | usb | serial | counter | "
+             "dump_pgm | clear | info | set_serial <v> | set <state>");
 }

@@ -9,6 +9,7 @@ endif()
 
 idf_component_register(
     SRCS
+        "sony898_emulator.c"
         "sony898_usb.c"
         "sony898_parser.c"
         "sony898_status.c"

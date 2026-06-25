@@ -102,6 +102,18 @@ static const char *const _state_names[SONY898_STATE__COUNT] = {
 
 static _Atomic(sony898_state_t) _state = SONY898_STATE_IDLE;
 
+/* IEEE1284 SCSNO field: serial padded with '-' to 16 chars ("A123----"). */
+static char _scsno[17] = CFG_DEV_SCSNO;
+
+static void set_scsno(const char *serial) {
+    if (!serial || !serial[0]) return;
+    size_t n = strlen(serial);
+    if (n > 16) n = 16;
+    memset(_scsno, '-', 16);
+    memcpy(_scsno, serial, n);
+    _scsno[16] = '\0';
+}
+
 /* Custom field overrides (cleared on set_state). */
 static struct {
     bool     active;
@@ -168,13 +180,13 @@ static void rebuild_cache(void) {
         "SCSYI:" CFG_DEV_SCSYI ";"
         "SCSVI:" CFG_DEV_SCSVI ";"
         "SCMDI:" CFG_DEV_SCMDI ";"
-        "SCSNO:" CFG_DEV_SCSNO ";"
+        "SCSNO:%s;"
         "SCJBS:%04X;"
         "SCCAI:" CFG_DEV_SCCAI ";"
         "SCGSI:" CFG_DEV_SCGSI ";"
         "SCQTI:" CFG_DEV_SCQTI ";"
         "SPUQI:" CFG_DEV_SPUQI ";",
-        scsye, scmde, scmce, scjbs);
+        scsye, scmde, scmce, _scsno, scjbs);
 
     _bulk_len = (size_t)snprintf(_bulk_buf, sizeof(_bulk_buf),
         "SCMDE=%04X\r\nSCMCE=%02X\r\nSCSYE=%02X\r\nSCPRS=%04X\r\n",
@@ -184,11 +196,12 @@ static void rebuild_cache(void) {
 
 /* ── Public API ──────────────────────────────────────────────────────────── */
 
-void sony898_status_init(void) {
+void sony898_status_init(const char *serial) {
+    set_scsno(serial);
     atomic_store(&_state, SONY898_STATE_IDLE);
     _custom.active = false;
     rebuild_cache();
-    ESP_LOGI(TAG, "status: IDLE");
+    ESP_LOGI(TAG, "status: IDLE  serial=%s", _scsno);
 }
 
 sony898_state_t sony898_status_get_state(void) {

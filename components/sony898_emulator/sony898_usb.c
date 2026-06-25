@@ -103,11 +103,13 @@ static uint8_t const _desc_config[] = {
 };
 
 /* ── String descriptors ───────────────────────────────────────────────────── */
+static char _serial_str[32] = CFG_USB_SERIAL;  /* filled at init from config */
+
 static char const *_desc_strings[] = {
     (const char[]) { 0x09, 0x04 },   /* 0: LANGID = English (0x0409) */
     CFG_USB_MANUFACTURER,             /* 1: Manufacturer */
     CFG_USB_PRODUCT,                  /* 2: Product */
-    CFG_USB_SERIAL,                   /* 3: Serial */
+    _serial_str,                      /* 3: Serial — runtime per-unit value */
 };
 
 /*
@@ -327,26 +329,28 @@ usbd_class_driver_t const *usbd_app_driver_get_cb(uint8_t *driver_count) {
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
-esp_err_t sony898_usb_init(void) {
+esp_err_t sony898_usb_init(const char *serial) {
+    if (serial && serial[0]) {
+        strncpy(_serial_str, serial, sizeof(_serial_str) - 1);
+        _serial_str[sizeof(_serial_str) - 1] = '\0';
+    }
+
     tinyusb_config_t cfg = {
-        .device_descriptor       = &_desc_device,
-        .string_descriptor       = _desc_strings,
-        .string_descriptor_count = TU_ARRAY_SIZE(_desc_strings),
-        .external_phy            = false,
+        .device_descriptor        = &_desc_device,
+        .string_descriptor        = _desc_strings,
+        .string_descriptor_count  = TU_ARRAY_SIZE(_desc_strings),
+        .external_phy             = false,
         .configuration_descriptor = _desc_config,
     };
 
     ESP_RETURN_ON_ERROR(tinyusb_driver_install(&cfg),
                         TAG, "tinyusb_driver_install failed");
 
-    ESP_LOGI(TAG, "USB printer initialised: VID=%04X PID=%04X",
-             CFG_USB_VID, CFG_USB_PID);
-    ESP_LOGI(TAG, "  Manufacturer : %s", CFG_USB_MANUFACTURER);
-    ESP_LOGI(TAG, "  Product      : %s", CFG_USB_PRODUCT);
-    ESP_LOGI(TAG, "  Serial       : %s", CFG_USB_SERIAL);
-    ESP_LOGI(TAG, "  Class 7/1/2  : Printer Bidirectional");
-    ESP_LOGI(TAG, "  EP OUT 0x%02X  EP IN 0x%02X  pkt=%u bytes (FS)",
-             PRINTER_EP_OUT, PRINTER_EP_IN, PRINTER_EP_SIZE);
+    ESP_LOGI(TAG, "USB printer: VID=%04X PID=%04X  serial=%s",
+             CFG_USB_VID, CFG_USB_PID, _serial_str);
+    ESP_LOGI(TAG, "  %s / %s  Class 7/1/2  EP OUT 0x%02X  EP IN 0x%02X",
+             CFG_USB_MANUFACTURER, CFG_USB_PRODUCT,
+             PRINTER_EP_OUT, PRINTER_EP_IN);
     return ESP_OK;
 }
 
