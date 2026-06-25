@@ -254,6 +254,11 @@ extern "C" void app_main() {
 
     printer_module_init();
 
+    /* Serial number for this unit.
+     * nullptr  — load from NVS (factory: flash firmware → "set_serial A1234567" → reboot)
+     * "XXXXXXX" — fixed serial hardcoded in firmware (per-unit build or development) */
+    Printer.serial = nullptr;
+
     ESP_ERROR_CHECK(Printer.init());
 
     xTaskCreate(uart_task, "uart", 4096, nullptr, 5, nullptr);
