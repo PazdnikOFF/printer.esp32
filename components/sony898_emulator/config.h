@@ -5,7 +5,7 @@
 #define CFG_USB_PID          0x0877u
 #define CFG_USB_MANUFACTURER "Sony"
 #define CFG_USB_PRODUCT      "UP-D898MD_X898MD"
-#define CFG_USB_SERIAL       "7150628"
+#define CFG_USB_SERIAL       "0000000"
 
 /* ── IEEE1284 Device ID — static fields ─────────────────────────────────── */
 #define CFG_DEV_MFG   "Sony"
