@@ -182,18 +182,22 @@ static void uart_task(void *arg) {
             cmd_len = 0;
             uart_puts("\r\n");
 
-            if      (strcmp(cmd, "status")           == 0) cmd_status();
-            else if (strcmp(cmd, "device_id")        == 0) cmd_device_id();
-            else if (strcmp(cmd, "usb")              == 0) cmd_usb();
-            else if (strcmp(cmd, "serial")           == 0) cmd_serial();
-            else if (strcmp(cmd, "counter")          == 0) cmd_counter();
-            else if (strcmp(cmd, "dump_pgm")         == 0) cmd_dump_pgm();
-            else if (strcmp(cmd, "clear")            == 0) cmd_clear();
-            else if (strcmp(cmd, "info")             == 0) cmd_info();
-            else if (strncmp(cmd, "set_serial ", 11) == 0) cmd_set_serial(cmd + 11);
-            else if (strncmp(cmd, "set ", 4)         == 0) cmd_set_state(cmd + 4);
+            /* trim leading whitespace */
+            char *p = cmd;
+            while (*p == ' ' || *p == '\t') p++;
+
+            if      (strcmp(p, "status")           == 0) cmd_status();
+            else if (strcmp(p, "device_id")        == 0) cmd_device_id();
+            else if (strcmp(p, "usb")              == 0) cmd_usb();
+            else if (strcmp(p, "serial")           == 0) cmd_serial();
+            else if (strcmp(p, "counter")          == 0) cmd_counter();
+            else if (strcmp(p, "dump_pgm")         == 0) cmd_dump_pgm();
+            else if (strcmp(p, "clear")            == 0) cmd_clear();
+            else if (strcmp(p, "info")             == 0) cmd_info();
+            else if (strncmp(p, "set_serial ", 11) == 0) cmd_set_serial(p + 11);
+            else if (strncmp(p, "set ", 4)         == 0) cmd_set_state(p + 4);
             else {
-                uart_printf("unknown: %s\r\n", cmd);
+                uart_printf("unknown: %s\r\n", p);
                 uart_putline("commands: status | device_id | usb | serial | counter |"
                              " dump_pgm | clear | info | set_serial <v> | set <state>");
             }
