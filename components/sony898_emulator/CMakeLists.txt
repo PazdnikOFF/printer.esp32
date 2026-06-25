@@ -13,10 +13,14 @@ idf_component_register(
         "sony898_parser.c"
         "sony898_status.c"
         "sony898_image.c"
+        "sony898_sensors.c"
+        "sony898_printer_iface.c"
+        "sony898_counter.c"
     INCLUDE_DIRS "."
     PRIV_REQUIRES
         ${tinyusb_dep}
         log
         freertos
         heap
+        nvs_flash
 )

@@ -3,9 +3,9 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "esp_err.h"
+#include "config.h"
 
-/* Maximum image size accepted from host (fits in 8 MB PSRAM with margin). */
-#define MAX_IMAGE_BYTES (6u * 1024u * 1024u)
+#define MAX_IMAGE_BYTES CFG_MAX_IMAGE_BYTES
 
 void        sony898_image_init(void);
 esp_err_t   sony898_image_alloc(uint16_t width, uint16_t height);

@@ -32,3 +32,18 @@ bool sony898_usb_is_ready_for_print(void);
  * The task runs tud_task() in a loop at highest priority.
  */
 void sony898_usb_start_task(void);
+
+/* ── USB connection event callbacks ─────────────────────────────────────────
+ *
+ * Register handlers to be notified of USB connect / disconnect events.
+ * Both callbacks are invoked from the TinyUSB device task context —
+ * keep them short and non-blocking.
+ *
+ * Example:
+ *   sony898_usb_set_connect_cb(on_usb_connect);
+ *   sony898_usb_set_disconnect_cb(on_usb_disconnect);
+ */
+typedef void (*sony898_usb_event_cb_t)(void);
+
+void sony898_usb_set_connect_cb(sony898_usb_event_cb_t cb);
+void sony898_usb_set_disconnect_cb(sony898_usb_event_cb_t cb);

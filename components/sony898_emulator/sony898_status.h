@@ -34,19 +34,6 @@ void            sony898_status_set_state(sony898_state_t state);
 const char     *sony898_status_state_name(sony898_state_t state);
 
 /*
- * Build IEEE1284 Device ID string for the given state into out[out_len].
- * The string uses field separators "FIELD:value;" as per IEEE1284.
- * Dynamic fields (SCSYE, SCMDE, SCMCE, SCJBS) are filled from the
- * state table.  Unconfirmed fields are kept as compatibility templates.
- * Returns ESP_ERR_INVALID_SIZE if out_len is too small.
- */
-esp_err_t sony898_status_build_ieee1284(
-    sony898_state_t state,
-    char *out,
-    size_t out_len
-);
-
-/*
  * Override error-code fields for the current state.
  * Overrides are cleared when sony898_status_set_state() is called.
  * Use when exact codes are known from real USB traffic capture.

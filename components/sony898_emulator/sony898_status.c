@@ -1,4 +1,5 @@
 #include "sony898_status.h"
+#include "config.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include <stdatomic.h>
@@ -44,38 +45,32 @@ static const state_codes_t _tbl[SONY898_STATE__COUNT] = {
         .port_status = PRINTER_PORT_NOT_FAULT | PRINTER_PORT_SELECT,
     },
     [SONY898_STATE_COVER_OPEN] = {
-        /* SCMCE=01 confirmed: Gutenprint decodes as "Cover open" (ТЗ §9) */
-        .scmde = 0x0000, .scmce = 0x01, .scsye = 0x00,
+        .scmde = CFG_ERR_COVER_OPEN_SCMDE, .scmce = CFG_ERR_COVER_OPEN_SCMCE, .scsye = 0x00,
         .scjbs = 0x0000,
-        .port_status = 0x00, /* fault, offline */
+        .port_status = 0x00,
     },
     [SONY898_STATE_NO_PAPER] = {
-        /* SCMDE=0A00 confirmed from ТЗ error table */
-        .scmde = 0x0A00, .scmce = 0x00, .scsye = 0x00,
+        .scmde = CFG_ERR_NO_PAPER_SCMDE, .scmce = 0x00, .scsye = 0x00,
         .scjbs = 0x0000,
         .port_status = PRINTER_PORT_SELECT | PRINTER_PORT_PAPER_EMPTY,
     },
     [SONY898_STATE_NO_RIBBON] = {
-        /* SCMDE=0002 confirmed from ТЗ error table */
-        .scmde = 0x0002, .scmce = 0x00, .scsye = 0x00,
+        .scmde = CFG_ERR_NO_RIBBON_SCMDE, .scmce = 0x00, .scsye = 0x00,
         .scjbs = 0x0000,
         .port_status = 0x00,
     },
     [SONY898_STATE_NO_MEDIA] = {
-        /* SCMDE=0300 confirmed from ТЗ error table */
-        .scmde = 0x0300, .scmce = 0x00, .scsye = 0x00,
+        .scmde = CFG_ERR_NO_MEDIA_SCMDE, .scmce = 0x00, .scsye = 0x00,
         .scjbs = 0x0000,
         .port_status = 0x00,
     },
     [SONY898_STATE_MEDIA_MISMATCH] = {
-        /* SCMDE=2000 confirmed from ТЗ error table */
-        .scmde = 0x2000, .scmce = 0x00, .scsye = 0x00,
+        .scmde = CFG_ERR_MEDIA_MISMATCH_SCMDE, .scmce = 0x00, .scsye = 0x00,
         .scjbs = 0x0000,
         .port_status = 0x00,
     },
     [SONY898_STATE_SYSTEM_ERROR] = {
-        /* UNKNOWN: generic system-error codes, not confirmed from real device */
-        .scmde = 0x0001, .scmce = 0x00, .scsye = 0x01,
+        .scmde = CFG_ERR_SYSTEM_SCMDE, .scmce = 0x00, .scsye = CFG_ERR_SYSTEM_SCSYE,
         .scjbs = 0x0000,
         .port_status = 0x00,
     },
@@ -174,46 +169,6 @@ const char *sony898_status_state_name(sony898_state_t state) {
     return _state_names[state];
 }
 
-esp_err_t sony898_status_build_ieee1284(sony898_state_t state,
-                                         char *out, size_t out_len) {
-    if (!out || out_len == 0) return ESP_ERR_INVALID_ARG;
-    if (state >= SONY898_STATE__COUNT) state = SONY898_STATE_UNKNOWN_ERROR;
-    const state_codes_t *row = &_tbl[state];
-
-    int n = snprintf(out, out_len,
-        /* ── Confirmed fields ──────────────────────────────────────────── */
-        "MFG:Sony;"
-        "MDL:UP-D898MD_X898MD;"
-        "DES:Sony UP-D898MD_X898MD;"
-        "CMD:SPJL-DS,SPDL-DS2;"
-        "CLS:PRINTER;"
-        /* ── UNKNOWN: template fields from real device, meaning unconfirmed */
-        "SCDIV:0100;"
-        "SCSYV:01010000;"
-        "SCSYS:0000001000010000000000;"
-        "SCMDS:00000500000100000000;"
-        /* ── Dynamic error fields (confirmed from ТЗ §9) ──────────────── */
-        "SCSYE:%02X;"
-        "SCMDE:%04X;"
-        "SCMCE:%02X;"
-        /* ── UNKNOWN: template fields ──────────────────────────────────── */
-        "SCSYI:100005001000050000000000014500;"
-        "SCSVI:000204000204;"
-        "SCMDI:200406;"
-        "SCSNO:0000000---------;"
-        /* ── Dynamic job status (confirmed from ТЗ §9) ────────────────── */
-        "SCJBS:%04X;"
-        /* ── UNKNOWN: template fields ──────────────────────────────────── */
-        "SCCAI:00000000000000;"
-        "SCGSI:01;"
-        "SCQTI:0001;"
-        "SPUQI:0000;",
-        row->scsye, row->scmde, row->scmce, row->scjbs);
-
-    if (n < 0 || (size_t)n >= out_len) return ESP_ERR_INVALID_SIZE;
-    return ESP_OK;
-}
-
 esp_err_t sony898_status_set_custom_fields(uint16_t scmde, uint8_t scmce,
                                             uint8_t scsye, uint16_t scjbs) {
     _custom.scmde  = scmde;
@@ -231,27 +186,27 @@ const char *sony898_status_get_ieee1284_id(void) {
     get_effective_codes(&scmde, &scmce, &scsye, &scjbs, &port_status);
 
     snprintf(_ieee1284_buf, sizeof(_ieee1284_buf),
-        "MFG:Sony;"
-        "MDL:UP-D898MD_X898MD;"
-        "DES:Sony UP-D898MD_X898MD;"
-        "CMD:SPJL-DS,SPDL-DS2;"
+        "MFG:"   CFG_DEV_MFG   ";"
+        "MDL:"   CFG_DEV_MDL   ";"
+        "DES:"   CFG_DEV_DES   ";"
+        "CMD:"   CFG_DEV_CMD   ";"
         "CLS:PRINTER;"
-        "SCDIV:0100;"
-        "SCSYV:01010000;"
-        "SCSYS:0000001000010000000000;"
-        "SCMDS:00000500000100000000;"
+        "SCDIV:" CFG_DEV_SCDIV ";"
+        "SCSYV:" CFG_DEV_SCSYV ";"
+        "SCSYS:" CFG_DEV_SCSYS ";"
+        "SCMDS:" CFG_DEV_SCMDS ";"
         "SCSYE:%02X;"
         "SCMDE:%04X;"
         "SCMCE:%02X;"
-        "SCSYI:100005001000050000000000014500;"
-        "SCSVI:000204000204;"
-        "SCMDI:200406;"
-        "SCSNO:0000000---------;"
+        "SCSYI:" CFG_DEV_SCSYI ";"
+        "SCSVI:" CFG_DEV_SCSVI ";"
+        "SCMDI:" CFG_DEV_SCMDI ";"
+        "SCSNO:" CFG_DEV_SCSNO ";"
         "SCJBS:%04X;"
-        "SCCAI:00000000000000;"
-        "SCGSI:01;"
-        "SCQTI:0001;"
-        "SPUQI:0000;",
+        "SCCAI:" CFG_DEV_SCCAI ";"
+        "SCGSI:" CFG_DEV_SCGSI ";"
+        "SCQTI:" CFG_DEV_SCQTI ";"
+        "SPUQI:" CFG_DEV_SPUQI ";",
         scsye, scmde, scmce, scjbs);
 
     return _ieee1284_buf;

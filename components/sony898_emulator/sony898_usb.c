@@ -15,6 +15,7 @@
 #include "sony898_parser.h"
 #include "sony898_status.h"
 #include "sony898_image.h"
+#include "config.h"
 #include "esp_log.h"
 #include "esp_check.h"
 #include "tinyusb.h"
@@ -27,9 +28,7 @@
 
 static const char *TAG = "sony898_usb";
 
-/* ── USB identifiers (ТЗ §3) ─────────────────────────────────────────────── */
-#define SONY_VID          0x054Cu
-#define SONY_PID          0x0877u
+/* ── USB identifiers ─────────────────────────────────────────────────────── */
 #define PRINTER_EP_OUT    0x01u
 #define PRINTER_EP_IN     0x81u
 #define PRINTER_EP_SIZE   64u      /* Full Speed bulk max packet size */
@@ -40,14 +39,20 @@ static const char *TAG = "sony898_usb";
 #define PRINTER_REQ_SOFT_RESET      0x02u
 
 /* ── DMA buffers — must be in DRAM, 4-byte aligned ───────────────────────── */
-static uint8_t _out_buf[512] __attribute__((aligned(4)));
-static uint8_t _in_buf[512]  __attribute__((aligned(4)));
-static uint8_t _dev_id_buf[512] __attribute__((aligned(4)));
-static uint16_t _dev_id_len;
+static uint8_t _out_buf[512]    __attribute__((aligned(4)));
+static uint8_t _in_buf[512]     __attribute__((aligned(4)));
+static uint8_t _dev_id_buf[512] __attribute__((aligned(4)));  /* rebuilt per GET_DEVICE_ID */
 
 /* ── Connection state tracked via TinyUSB callbacks ──────────────────────── */
 static volatile atomic_bool _connected  = false;
 static volatile atomic_bool _configured = false;
+
+/* ── Connection event callbacks ───────────────────────────────────────────── */
+static sony898_usb_event_cb_t _connect_cb    = NULL;
+static sony898_usb_event_cb_t _disconnect_cb = NULL;
+
+void sony898_usb_set_connect_cb(sony898_usb_event_cb_t cb)    { _connect_cb    = cb; }
+void sony898_usb_set_disconnect_cb(sony898_usb_event_cb_t cb) { _disconnect_cb = cb; }
 
 /* ── Custom printer class driver state ───────────────────────────────────── */
 static struct {
@@ -67,8 +72,8 @@ static tusb_desc_device_t const _desc_device = {
     .bDeviceSubClass    = 0x00,
     .bDeviceProtocol    = 0x00,
     .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
-    .idVendor           = SONY_VID,
-    .idProduct          = SONY_PID,
+    .idVendor           = CFG_USB_VID,
+    .idProduct          = CFG_USB_PID,
     .bcdDevice          = 0x0100,
     .iManufacturer      = 1,
     .iProduct           = 2,
@@ -100,9 +105,9 @@ static uint8_t const _desc_config[] = {
 /* ── String descriptors ───────────────────────────────────────────────────── */
 static char const *_desc_strings[] = {
     (const char[]) { 0x09, 0x04 },   /* 0: LANGID = English (0x0409) */
-    "Sony",                            /* 1: Manufacturer (ТЗ §3) */
-    "UP-D898MD_X898MD",               /* 2: Product (ТЗ §3) */
-    "0000000",                         /* 3: Serial (ТЗ §3) */
+    CFG_USB_MANUFACTURER,             /* 1: Manufacturer */
+    CFG_USB_PRODUCT,                  /* 2: Product */
+    CFG_USB_SERIAL,                   /* 3: Serial */
 };
 
 /*
@@ -118,17 +123,52 @@ void tud_mount_cb(void) {
     atomic_store(&_connected,  true);
     atomic_store(&_configured, true);
     ESP_LOGI(TAG, "USB connected and configured");
+    if (_connect_cb) _connect_cb();
 }
 
 void tud_umount_cb(void) {
+    /*
+     * Called on libusb_reset_device() (bus reset from Gutenprint driver).
+     * For physical cable unplug the suspend callback fires instead.
+     * Use atomic_exchange to avoid double-firing if suspend already ran.
+     */
+    bool was_connected = atomic_exchange(&_connected, false);
     atomic_store(&_configured, false);
-    atomic_store(&_connected,  false);
-    ESP_LOGW(TAG, "USB disconnected");
+
+    if (sony898_parser_get_state() == PARSER_JOB_COMPLETE) {
+        sony898_parser_prepare_for_next_job();
+    } else {
+        sony898_parser_reset();
+    }
+
+    if (was_connected) {
+        ESP_LOGW(TAG, "USB unmounted (bus reset) — parser reset for next job");
+        if (_disconnect_cb) _disconnect_cb();
+    } else {
+        ESP_LOGD(TAG, "USB unmounted (already disconnected)");
+    }
 }
 
 void tud_suspend_cb(bool remote_wakeup_en) {
     (void)remote_wakeup_en;
-    ESP_LOGD(TAG, "USB suspended");
+    /*
+     * Physical cable unplug arrives here as a suspend event on ESP32-S3 —
+     * tud_umount_cb is NOT called in that case.  Update state here so that
+     * polling in status_log_task detects the disconnect within one cycle.
+     */
+    bool was_connected = atomic_exchange(&_connected, false);
+    atomic_store(&_configured, false);
+    if (was_connected) {
+        if (sony898_parser_get_state() == PARSER_JOB_COMPLETE) {
+            sony898_parser_prepare_for_next_job();
+        } else {
+            sony898_parser_reset();
+        }
+        ESP_LOGW(TAG, "USB suspended / cable unplugged — parser reset");
+        if (_disconnect_cb) _disconnect_cb();
+    } else {
+        ESP_LOGD(TAG, "USB suspended (already disconnected)");
+    }
 }
 
 void tud_resume_cb(void) {
@@ -148,7 +188,7 @@ static void send_bulk_status(void) {
         ESP_LOGE(TAG, "bulk IN queue failed (ep=0x%02x len=%u)", _prt.ep_in, (unsigned)len);
         _prt.in_busy = false;
     } else {
-        ESP_LOGI(TAG, "bulk IN queued: %.*s", (int)len, _in_buf);
+        ESP_LOGD(TAG, "bulk IN queued: %.*s", (int)len, _in_buf);
     }
 }
 
@@ -216,17 +256,24 @@ static bool printer_control_xfer_cb(uint8_t rhport, uint8_t stage,
     switch (req->bRequest) {
 
     case PRINTER_REQ_GET_DEVICE_ID: {
-        /* IEEE1284 Device ID: 2-byte BE length prefix + ASCII string.
-         * Buffer pre-built in sony898_usb_init() — no allocation in callback. */
-        uint16_t resp_len = (uint16_t)tu_min16(req->wLength, _dev_id_len);
-        ESP_LOGI(TAG, "GET_DEVICE_ID wLen=%u → %u bytes", req->wLength, resp_len);
+        /* Rebuild on every call so dynamic fields (SCMDE/SCMCE/SCSYE/SCJBS)
+         * reflect the current printer state — the host uses this for status polling. */
+        const char *id_str = sony898_status_get_ieee1284_id();
+        size_t str_len = strlen(id_str);
+        if (str_len > sizeof(_dev_id_buf) - 2) str_len = sizeof(_dev_id_buf) - 2;
+        uint16_t total = (uint16_t)(str_len + 2);
+        _dev_id_buf[0] = (uint8_t)(total >> 8);
+        _dev_id_buf[1] = (uint8_t)(total & 0xFF);
+        memcpy(_dev_id_buf + 2, id_str, str_len);
+        uint16_t resp_len = tu_min16(req->wLength, total);
+        ESP_LOGD(TAG, "GET_DEVICE_ID → %u bytes", resp_len);
         return tud_control_xfer(rhport, req, _dev_id_buf, resp_len);
     }
 
     case PRINTER_REQ_GET_PORT_STATUS: {
         static uint8_t port_status;
         port_status = sony898_status_get_port_status();
-        ESP_LOGI(TAG, "GET_PORT_STATUS → 0x%02X (%s)", port_status,
+        ESP_LOGD(TAG, "GET_PORT_STATUS → 0x%02X (%s)", port_status,
                  (port_status & 0x08) ? "ready" : "fault");
         return tud_control_xfer(rhport, req, &port_status, 1);
     }
@@ -245,28 +292,20 @@ static bool printer_xfer_cb(uint8_t rhport, uint8_t ep_addr,
                              xfer_result_t result, uint32_t xferred_bytes) {
     if (ep_addr == _prt.ep_out) {
         if (result == XFER_RESULT_SUCCESS && xferred_bytes > 0) {
-            /* Determine if this is a print job or a status query. */
-            if (xferred_bytes >= 8 &&
-                memcmp(_out_buf, "JOBSIZE=", 8) == 0) {
-                sony898_parser_feed(_out_buf, xferred_bytes);
-            } else {
-                /*
-                 * UNKNOWN command received via Bulk OUT.
-                 * Could be a Sony SPJL-DS status query from Gutenprint.
-                 * Log it and respond with current status on Bulk IN.
-                 * Exact query format not confirmed — see ТЗ §9 note.
-                 */
-                ESP_LOGI(TAG, "bulk OUT %"PRIu32" bytes (not JOBSIZE): %.*s",
-                         xferred_bytes, (int)TU_MIN(xferred_bytes, 64u), _out_buf);
-                send_bulk_status();
-            }
+            /*
+             * All bulk OUT data is print job content.
+             * Gutenprint's gutenprint53+usb backend never sends status queries
+             * via bulk OUT — status is always read via GET_DEVICE_ID (control).
+             */
+            sony898_parser_feed(_out_buf, xferred_bytes);
         }
         /* re-arm OUT endpoint */
         usbd_edpt_xfer(rhport, _prt.ep_out, _out_buf, sizeof(_out_buf));
 
     } else if (ep_addr == _prt.ep_in) {
         _prt.in_busy = false;
-        ESP_LOGI(TAG, "bulk IN %"PRIu32" bytes sent (in_busy cleared)", xferred_bytes);
+        ESP_LOGD(TAG, "bulk IN %"PRIu32" bytes sent", xferred_bytes);
+        send_bulk_status();
     }
 
     return true;
@@ -293,16 +332,6 @@ usbd_class_driver_t const *usbd_app_driver_get_cb(uint8_t *driver_count) {
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
 esp_err_t sony898_usb_init(void) {
-    /* Build Device ID buffer once (host reads it only during enumeration). */
-    const char *id_str = sony898_status_get_ieee1284_id();
-    size_t str_len = strlen(id_str);
-    if (str_len > sizeof(_dev_id_buf) - 2) str_len = sizeof(_dev_id_buf) - 2;
-    uint16_t total = (uint16_t)(str_len + 2);
-    _dev_id_buf[0] = (uint8_t)(total >> 8);
-    _dev_id_buf[1] = (uint8_t)(total & 0xFF);
-    memcpy(_dev_id_buf + 2, id_str, str_len);
-    _dev_id_len = total;
-
     tinyusb_config_t cfg = {
         .device_descriptor       = &_desc_device,
         .string_descriptor       = _desc_strings,
@@ -315,10 +344,10 @@ esp_err_t sony898_usb_init(void) {
                         TAG, "tinyusb_driver_install failed");
 
     ESP_LOGI(TAG, "USB printer initialised: VID=%04X PID=%04X",
-             SONY_VID, SONY_PID);
-    ESP_LOGI(TAG, "  Manufacturer : Sony");
-    ESP_LOGI(TAG, "  Product      : UP-D898MD_X898MD");
-    ESP_LOGI(TAG, "  Serial       : 0000000");
+             CFG_USB_VID, CFG_USB_PID);
+    ESP_LOGI(TAG, "  Manufacturer : %s", CFG_USB_MANUFACTURER);
+    ESP_LOGI(TAG, "  Product      : %s", CFG_USB_PRODUCT);
+    ESP_LOGI(TAG, "  Serial       : %s", CFG_USB_SERIAL);
     ESP_LOGI(TAG, "  Class 7/1/2  : Printer Bidirectional");
     ESP_LOGI(TAG, "  EP OUT 0x%02X  EP IN 0x%02X  pkt=%u bytes (FS)",
              PRINTER_EP_OUT, PRINTER_EP_IN, PRINTER_EP_SIZE);
