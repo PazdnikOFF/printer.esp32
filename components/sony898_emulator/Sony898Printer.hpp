@@ -26,6 +26,16 @@ extern "C" {
 class Sony898Printer {
 public:
 
+    /*
+     * Constructor — pass serial number to bind this instance to a specific unit.
+     * nullptr / omitted → serial loaded from NVS on init(), fallback to config.h default.
+     *
+     * Examples:
+     *   Sony898Printer Printer;               // NVS / default serial
+     *   Sony898Printer Printer("A1234567");   // fixed serial for this unit
+     */
+    explicit Sony898Printer(const char *sn = nullptr) : serial(sn) {}
+
     /* ── Configuration (set before init()) ─────────────────────────────── */
 
     /*
@@ -39,10 +49,10 @@ public:
     const char *product      = nullptr;  /* iProduct     string */
 
     /*
-     * Per-unit serial number.  nullptr = load from NVS, fallback to default.
-     * Write to NVS with setSerial() at the factory, then leave nullptr here.
+     * Per-unit serial number.
+     * Set via constructor or directly. nullptr → NVS → config.h fallback.
      */
-    const char *serial = nullptr;
+    const char *serial;
 
     /* Print module callback.  nullptr = built-in timer mode. */
     sony898_on_job_ready_cb_t onJobReady = nullptr;
