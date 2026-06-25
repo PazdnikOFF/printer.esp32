@@ -1,13 +1,12 @@
 /*
  * Sony UP-D898MD_X898MD USB printer emulator — application entry point.
  *
- * This file contains only configuration, wiring and the optional UART
- * service interface.  All emulator logic lives in the sony898_emulator
- * component and is accessed through its public API.
+ * Only Sony898Printer class methods are used here.
+ * All emulator logic is encapsulated in the sony898_emulator component.
  *
  * ── UART service commands (115200 8N1) ───────────────────────────────────────
  *   status              — printer / USB / image state
- *   device_id           — current IEEE1284 Device ID string
+ *   device_id           — IEEE1284 Device ID string
  *   serial              — active serial number
  *   counter             — total print count
  *   dump_pgm            — emit raw PGM image over UART
@@ -17,16 +16,18 @@
  *   set <state>         — force printer state for testing
  */
 
-#include "sony898_emulator.h"
-
+extern "C" {
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/uart.h"
+}
+
 #include <string.h>
-#include <stdio.h>
+#include <stdarg.h>
 #include <inttypes.h>
+#include "Sony898Printer.hpp"
 
 static const char *TAG = "main";
 
@@ -56,41 +57,38 @@ static void uart_printf(const char *fmt, ...) {
 
 /* ── Service UART commands ───────────────────────────────────────────────────*/
 
-static void cmd_status(void) {
-    uart_printf("state      : %s\r\n",   sony898_emulator_get_state_name());
-    uart_printf("port_status: 0x%02X\r\n", sony898_emulator_get_port_status());
+static void cmd_status() {
+    uart_printf("state      : %s\r\n",   Printer.getStateName());
+    uart_printf("port_status: 0x%02X\r\n", Printer.getPortStatus());
     uart_printf("usb        : connected=%d  configured=%d  ready=%d\r\n",
-                (int)sony898_emulator_usb_is_connected(),
-                (int)sony898_emulator_usb_is_configured(),
-                (int)sony898_emulator_usb_is_ready());
-    uart_printf("image      : ready=%d",  (int)sony898_emulator_image_ready());
-    if (sony898_emulator_image_ready()) {
+                (int)Printer.usbIsConnected(),
+                (int)Printer.usbIsConfigured(),
+                (int)Printer.usbIsReady());
+    uart_printf("image      : ready=%d", (int)Printer.imageReady());
+    if (Printer.imageReady()) {
         uart_printf("  %"PRIu16"x%"PRIu16"  %zu B  copies=%u",
-                    sony898_emulator_get_width(),
-                    sony898_emulator_get_height(),
-                    sony898_emulator_get_image_size(),
-                    sony898_emulator_get_copies());
+                    Printer.getWidth(), Printer.getHeight(),
+                    Printer.getImageSize(), Printer.getCopies());
     }
     uart_puts("\r\n");
     uart_printf("print_mod  : %s\r\n",
-                sony898_emulator_has_print_module() ? "registered" : "timer mode");
-    uart_printf("sensors_ok : %d\r\n",
-                (int)!sony898_emulator_has_sensor_error());
-    uart_printf("counter    : %"PRIu32"\r\n", sony898_emulator_get_print_count());
+                Printer.hasPrintModule() ? "registered" : "timer mode");
+    uart_printf("sensors_ok : %d\r\n", (int)!Printer.hasSensorError());
+    uart_printf("counter    : %"PRIu32"\r\n", Printer.getPrintCount());
 }
 
-static void cmd_device_id(void) {
-    uart_putline(sony898_emulator_get_ieee1284_id());
+static void cmd_device_id() {
+    uart_putline(Printer.getDeviceId());
 }
 
-static void cmd_usb(void) {
-    uart_printf("connected  : %d\r\n", (int)sony898_emulator_usb_is_connected());
-    uart_printf("configured : %d\r\n", (int)sony898_emulator_usb_is_configured());
-    uart_printf("ready      : %d\r\n", (int)sony898_emulator_usb_is_ready());
+static void cmd_usb() {
+    uart_printf("connected  : %d\r\n", (int)Printer.usbIsConnected());
+    uart_printf("configured : %d\r\n", (int)Printer.usbIsConfigured());
+    uart_printf("ready      : %d\r\n", (int)Printer.usbIsReady());
 }
 
-static void cmd_serial(void) {
-    uart_printf("serial: %s\r\n", sony898_emulator_get_serial());
+static void cmd_serial() {
+    uart_printf("serial: %s\r\n", Printer.getSerial());
 }
 
 static void cmd_set_serial(const char *arg) {
@@ -98,42 +96,39 @@ static void cmd_set_serial(const char *arg) {
         uart_putline("usage: set_serial <value>  (max 16 chars)");
         return;
     }
-    esp_err_t r = sony898_emulator_set_serial(arg);
-    if (r == ESP_OK) {
+    if (Printer.setSerial(arg) == ESP_OK) {
         uart_printf("OK: saved — reboot to apply: %s\r\n", arg);
     } else {
         uart_putline("ERROR: NVS write failed");
     }
 }
 
-static void cmd_counter(void) {
-    uart_printf("print_count: %"PRIu32"\r\n", sony898_emulator_get_print_count());
+static void cmd_counter() {
+    uart_printf("print_count: %"PRIu32"\r\n", Printer.getPrintCount());
 }
 
-static void cmd_info(void) {
+static void cmd_info() {
     uart_putline("VID          : 054C");
     uart_putline("PID          : 0877");
     uart_putline("Manufacturer : Sony");
     uart_putline("Product      : UP-D898MD_X898MD");
-    uart_printf("Serial       : %s\r\n", sony898_emulator_get_serial());
+    uart_printf("Serial       : %s\r\n", Printer.getSerial());
     uart_putline("Class        : 7/1/2 Printer Bidirectional");
     uart_putline("Protocol     : SPJL-DS, SPDL-DS2");
 }
 
-static void cmd_dump_pgm(void) {
-    if (!sony898_emulator_image_ready()) {
+static void cmd_dump_pgm() {
+    if (!Printer.imageReady()) {
         uart_putline("ERROR: no image");
         return;
     }
-    uint16_t w  = sony898_emulator_get_width();
-    uint16_t h  = sony898_emulator_get_height();
-    size_t   sz = sony898_emulator_get_image_size();
-    const uint8_t *img = sony898_emulator_get_image_buffer();
-
     char hdr[64];
-    int hlen = snprintf(hdr, sizeof(hdr), "P5\r\n%"PRIu16" %"PRIu16"\r\n255\r\n", w, h);
+    int hlen = snprintf(hdr, sizeof(hdr), "P5\r\n%"PRIu16" %"PRIu16"\r\n255\r\n",
+                        Printer.getWidth(), Printer.getHeight());
     uart_write_bytes(UART_NUM, hdr, hlen);
 
+    const uint8_t *img = Printer.getImageBuffer();
+    size_t sz = Printer.getImageSize();
     const size_t CHUNK = 4096;
     for (size_t off = 0; off < sz; off += CHUNK) {
         size_t n = sz - off;
@@ -143,8 +138,8 @@ static void cmd_dump_pgm(void) {
     }
 }
 
-static void cmd_clear(void) {
-    sony898_emulator_clear_job();
+static void cmd_clear() {
+    Printer.clearJob();
     uart_putline("OK: image cleared, parser reset");
 }
 
@@ -166,8 +161,8 @@ static void cmd_set_state(const char *arg) {
                      " no_paper no_ribbon no_media media_mismatch error");
         return;
     }
-    sony898_emulator_set_state(s);
-    uart_printf("state → %s\r\n", sony898_emulator_get_state_name());
+    Printer.setState(s);
+    uart_printf("state → %s\r\n", Printer.getStateName());
 }
 
 /* ── UART task ───────────────────────────────────────────────────────────────*/
@@ -212,32 +207,34 @@ static void uart_task(void *arg) {
 
 /* ── Print module wiring ─────────────────────────────────────────────────────
  *
- * Wire the thermal print module callback and optional USB event handlers here.
+ * Wire the thermal print module callback and sensor inputs here.
  *
  * The thermal module must:
- *   1. Implement the job callback and assign it to cfg->on_job_ready.
- *   2. Report sensor states from GPIO handlers:
- *        sony898_emulator_set_paper(gpio_get_level(PIN_PAPER));
- *        sony898_emulator_set_cover(gpio_get_level(PIN_COVER));
- *        sony898_emulator_set_ribbon(gpio_get_level(PIN_RIBBON));
- *        sony898_emulator_set_media_match(media_ok);
- *        sony898_emulator_set_system_error(hw_fault);
+ *   1. Assign the callback:
+ *        Printer.onJobReady = thermal_printer_on_job_ready;
+ *
+ *   2. Report sensor states from GPIO handlers or its own task:
+ *        Printer.setPaper(gpio_get_level(PIN_PAPER));
+ *        Printer.setCover(gpio_get_level(PIN_COVER));
+ *        Printer.setRibbon(gpio_get_level(PIN_RIBBON));
+ *        Printer.setMediaMatch(media_ok);
+ *        Printer.setSystemError(hw_fault);
+ *
  *   3. Signal completion from its print task:
- *        sony898_emulator_notify_done();    // success
- *        sony898_emulator_notify_error();   // hardware fault
+ *        Printer.notifyDone();    // success
+ *        Printer.notifyError();   // hardware fault
  * ────────────────────────────────────────────────────────────────────────────*/
 
-static void printer_module_init(sony898_config_t *cfg) {
-    (void)cfg;
+static void printer_module_init() {
     /* TODO: wire thermal print module
      *   thermal_printer_init();
-     *   cfg->on_job_ready = thermal_printer_on_job_ready;
+     *   Printer.onJobReady = thermal_printer_on_job_ready;
      */
 }
 
 /* ── app_main ────────────────────────────────────────────────────────────────*/
 
-void app_main(void) {
+extern "C" void app_main() {
     esp_err_t nvs_ret = nvs_flash_init();
     if (nvs_ret == ESP_ERR_NVS_NO_FREE_PAGES ||
         nvs_ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -255,19 +252,13 @@ void app_main(void) {
     ESP_ERROR_CHECK(uart_driver_install(UART_NUM, UART_BUF_SZ * 2, 0, 0, NULL, 0));
     ESP_ERROR_CHECK(uart_param_config(UART_NUM, &uart_cfg));
 
-    sony898_config_t cfg = {
-        .serial        = NULL,  /* load from NVS; program with: set_serial <value> */
-        .on_job_ready  = NULL,
-        .on_connect    = NULL,
-        .on_disconnect = NULL,
-    };
-    printer_module_init(&cfg);
+    printer_module_init();
 
-    ESP_ERROR_CHECK(sony898_emulator_init(&cfg));
+    ESP_ERROR_CHECK(Printer.init());
 
-    xTaskCreate(uart_task, "uart", 4096, NULL, 5, NULL);
+    xTaskCreate(uart_task, "uart", 4096, nullptr, 5, nullptr);
 
-    sony898_emulator_start();
+    Printer.begin();
 
-    ESP_LOGI(TAG, "ready — serial: %s", sony898_emulator_get_serial());
+    ESP_LOGI(TAG, "ready — serial: %s", Printer.getSerial());
 }
