@@ -19,7 +19,7 @@
 #define CFG_DEV_SCSYI "100005001000050000000000014500"
 #define CFG_DEV_SCSVI "000204000204"
 #define CFG_DEV_SCMDI "200406"
-#define CFG_DEV_SCSNO "7150628---------"
+/* SCSNO is formatted at runtime from the serial number — see sony898_status.c set_scsno() */
 #define CFG_DEV_SCCAI "00000000000000"
 #define CFG_DEV_SCGSI "01"
 #define CFG_DEV_SCQTI "0001"

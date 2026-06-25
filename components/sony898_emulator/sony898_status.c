@@ -102,8 +102,9 @@ static const char *const _state_names[SONY898_STATE__COUNT] = {
 
 static _Atomic(sony898_state_t) _state = SONY898_STATE_IDLE;
 
-/* IEEE1284 SCSNO field: serial padded with '-' to 16 chars ("A123----"). */
-static char _scsno[17] = CFG_DEV_SCSNO;
+/* IEEE1284 SCSNO field: serial padded with '-' to 16 chars ("A123----").
+ * Populated by set_scsno() during sony898_status_init(). */
+static char _scsno[17];
 
 static void set_scsno(const char *serial) {
     if (!serial || !serial[0]) return;
