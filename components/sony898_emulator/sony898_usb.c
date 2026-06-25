@@ -64,7 +64,7 @@ static struct {
 } _prt;
 
 /* ── Device descriptor (ТЗ §3) ───────────────────────────────────────────── */
-static tusb_desc_device_t const _desc_device = {
+static tusb_desc_device_t _desc_device = {
     .bLength            = sizeof(tusb_desc_device_t),
     .bDescriptorType    = TUSB_DESC_DEVICE,
     .bcdUSB             = 0x0200,
@@ -103,13 +103,15 @@ static uint8_t const _desc_config[] = {
 };
 
 /* ── String descriptors ───────────────────────────────────────────────────── */
-static char _serial_str[32] = CFG_USB_SERIAL;  /* filled at init from config */
+static char _manufacturer_str[64] = CFG_USB_MANUFACTURER;
+static char _product_str[64]      = CFG_USB_PRODUCT;
+static char _serial_str[32]       = CFG_USB_SERIAL;
 
 static char const *_desc_strings[] = {
     (const char[]) { 0x09, 0x04 },   /* 0: LANGID = English (0x0409) */
-    CFG_USB_MANUFACTURER,             /* 1: Manufacturer */
-    CFG_USB_PRODUCT,                  /* 2: Product */
-    _serial_str,                      /* 3: Serial — runtime per-unit value */
+    _manufacturer_str,                /* 1: Manufacturer — runtime */
+    _product_str,                     /* 2: Product      — runtime */
+    _serial_str,                      /* 3: Serial       — runtime per-unit */
 };
 
 /*
@@ -329,11 +331,19 @@ usbd_class_driver_t const *usbd_app_driver_get_cb(uint8_t *driver_count) {
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
-esp_err_t sony898_usb_init(const char *serial) {
-    if (serial && serial[0]) {
+esp_err_t sony898_usb_init(uint16_t vid, uint16_t pid,
+                            const char *manufacturer,
+                            const char *product,
+                            const char *serial) {
+    _desc_device.idVendor  = vid ? vid : CFG_USB_VID;
+    _desc_device.idProduct = pid ? pid : CFG_USB_PID;
+
+    if (manufacturer && manufacturer[0])
+        strncpy(_manufacturer_str, manufacturer, sizeof(_manufacturer_str) - 1);
+    if (product && product[0])
+        strncpy(_product_str, product, sizeof(_product_str) - 1);
+    if (serial && serial[0])
         strncpy(_serial_str, serial, sizeof(_serial_str) - 1);
-        _serial_str[sizeof(_serial_str) - 1] = '\0';
-    }
 
     tinyusb_config_t cfg = {
         .device_descriptor        = &_desc_device,
@@ -347,12 +357,16 @@ esp_err_t sony898_usb_init(const char *serial) {
                         TAG, "tinyusb_driver_install failed");
 
     ESP_LOGI(TAG, "USB printer: VID=%04X PID=%04X  serial=%s",
-             CFG_USB_VID, CFG_USB_PID, _serial_str);
+             _desc_device.idVendor, _desc_device.idProduct, _serial_str);
     ESP_LOGI(TAG, "  %s / %s  Class 7/1/2  EP OUT 0x%02X  EP IN 0x%02X",
-             CFG_USB_MANUFACTURER, CFG_USB_PRODUCT,
-             PRINTER_EP_OUT, PRINTER_EP_IN);
+             _manufacturer_str, _product_str, PRINTER_EP_OUT, PRINTER_EP_IN);
     return ESP_OK;
 }
+
+uint16_t    sony898_usb_get_vid(void)          { return _desc_device.idVendor; }
+uint16_t    sony898_usb_get_pid(void)          { return _desc_device.idProduct; }
+const char *sony898_usb_get_manufacturer(void) { return _manufacturer_str; }
+const char *sony898_usb_get_product(void)      { return _product_str; }
 
 bool sony898_usb_is_connected(void) {
     return atomic_load(&_connected);

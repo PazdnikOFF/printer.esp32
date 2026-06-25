@@ -9,6 +9,10 @@ Sony898Printer Printer;
 
 esp_err_t Sony898Printer::init() {
     sony898_config_t cfg = {};
+    cfg.vid           = vid;
+    cfg.pid           = pid;
+    cfg.manufacturer  = manufacturer;
+    cfg.product       = product;
     cfg.serial        = serial;
     cfg.on_job_ready  = onJobReady;
     cfg.on_connect    = onConnect;
@@ -22,9 +26,15 @@ void Sony898Printer::begin() {
 
 /* ── Identity ────────────────────────────────────────────────────────────── */
 
-const char *Sony898Printer::getSerial()   const { return sony898_emulator_get_serial(); }
+uint16_t    Sony898Printer::getVid()          const { return sony898_emulator_get_vid(); }
+uint16_t    Sony898Printer::getPid()          const { return sony898_emulator_get_pid(); }
+const char *Sony898Printer::getManufacturer() const { return sony898_emulator_get_manufacturer(); }
+const char *Sony898Printer::getProduct()      const { return sony898_emulator_get_product(); }
+const char *Sony898Printer::getProtocol()     const { return sony898_emulator_get_protocol(); }
+const char *Sony898Printer::getUsbClass()     const { return sony898_emulator_get_usb_class(); }
+const char *Sony898Printer::getSerial()       const { return sony898_emulator_get_serial(); }
 esp_err_t   Sony898Printer::setSerial(const char *s) { return sony898_emulator_set_serial(s); }
-const char *Sony898Printer::getDeviceId() const { return sony898_emulator_get_ieee1284_id(); }
+const char *Sony898Printer::getDeviceId()     const { return sony898_emulator_get_ieee1284_id(); }
 
 /* ── USB state ───────────────────────────────────────────────────────────── */
 

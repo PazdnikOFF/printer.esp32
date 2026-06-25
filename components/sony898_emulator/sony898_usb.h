@@ -1,13 +1,23 @@
 #pragma once
 #include <stdbool.h>
+#include <stdint.h>
 #include "esp_err.h"
 
 /*
- * Initialize TinyUSB as Sony UP-D898MD_X898MD USB printer.
- * serial — per-unit serial number string used in iSerial USB descriptor.
+ * Initialize TinyUSB with full device identity.
+ * Any zero/NULL value falls back to the compile-time default in config.h.
  * Call once at startup (via sony898_emulator_init).
  */
-esp_err_t sony898_usb_init(const char *serial);
+esp_err_t sony898_usb_init(uint16_t vid, uint16_t pid,
+                            const char *manufacturer,
+                            const char *product,
+                            const char *serial);
+
+/* Active USB identity — valid after sony898_usb_init(). */
+uint16_t    sony898_usb_get_vid(void);
+uint16_t    sony898_usb_get_pid(void);
+const char *sony898_usb_get_manufacturer(void);
+const char *sony898_usb_get_product(void);
 
 /*
  * Returns true if ESP32-S3 USB Device has been seen by a USB host

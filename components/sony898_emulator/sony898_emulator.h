@@ -30,6 +30,16 @@
 
 typedef struct {
     /*
+     * USB device identity — all optional.
+     * NULL/0 → use compile-time default from config.h (CFG_USB_*).
+     * Set for OEM or multi-model deployments.
+     */
+    uint16_t    vid;          /* USB Vendor  ID. 0 → CFG_USB_VID  */
+    uint16_t    pid;          /* USB Product ID. 0 → CFG_USB_PID  */
+    const char *manufacturer; /* iManufacturer string. NULL → CFG_USB_MANUFACTURER */
+    const char *product;      /* iProduct     string. NULL → CFG_USB_PRODUCT */
+
+    /*
      * Per-unit serial number (USB iSerial + IEEE1284 SCSNO).
      * NULL → read from NVS ("sony898"/"serial"), fallback to CFG_USB_SERIAL.
      * Write permanently with sony898_emulator_set_serial() at the factory.
@@ -57,6 +67,16 @@ esp_err_t sony898_emulator_init(const sony898_config_t *cfg);
 void sony898_emulator_start(void);
 
 /* ── Identity ────────────────────────────────────────────────────────────── */
+
+/* Active USB device identity — valid after init(). */
+uint16_t    sony898_emulator_get_vid(void);
+uint16_t    sony898_emulator_get_pid(void);
+const char *sony898_emulator_get_manufacturer(void);
+const char *sony898_emulator_get_product(void);
+
+/* Protocol and USB class strings (model-fixed, not per-unit). */
+const char *sony898_emulator_get_protocol(void);
+const char *sony898_emulator_get_usb_class(void);
 
 /* Active serial number (from cfg or NVS).  Available after init(). */
 const char *sony898_emulator_get_serial(void);

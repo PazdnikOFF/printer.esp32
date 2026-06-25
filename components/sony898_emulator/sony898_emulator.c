@@ -156,7 +156,13 @@ esp_err_t sony898_emulator_init(const sony898_config_t *cfg) {
         if (cfg->on_disconnect) sony898_usb_set_disconnect_cb(cfg->on_disconnect);
     }
 
-    return sony898_usb_init(_serial);
+    return sony898_usb_init(
+        cfg ? cfg->vid          : 0,
+        cfg ? cfg->pid          : 0,
+        cfg ? cfg->manufacturer : NULL,
+        cfg ? cfg->product      : NULL,
+        _serial
+    );
 }
 
 void sony898_emulator_start(void) {
@@ -165,6 +171,13 @@ void sony898_emulator_start(void) {
 }
 
 /* ── Identity ────────────────────────────────────────────────────────────── */
+
+uint16_t    sony898_emulator_get_vid(void)          { return sony898_usb_get_vid(); }
+uint16_t    sony898_emulator_get_pid(void)          { return sony898_usb_get_pid(); }
+const char *sony898_emulator_get_manufacturer(void) { return sony898_usb_get_manufacturer(); }
+const char *sony898_emulator_get_product(void)      { return sony898_usb_get_product(); }
+const char *sony898_emulator_get_protocol(void)     { return CFG_DEV_CMD; }
+const char *sony898_emulator_get_usb_class(void)    { return "7/1/2 Printer Bidirectional"; }
 
 const char *sony898_emulator_get_serial(void) {
     return _serial;

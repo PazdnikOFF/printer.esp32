@@ -108,13 +108,13 @@ static void cmd_counter() {
 }
 
 static void cmd_info() {
-    uart_putline("VID          : 054C");
-    uart_putline("PID          : 0877");
-    uart_putline("Manufacturer : Sony");
-    uart_putline("Product      : UP-D898MD_X898MD");
-    uart_printf("Serial       : %s\r\n", Printer.getSerial());
-    uart_putline("Class        : 7/1/2 Printer Bidirectional");
-    uart_putline("Protocol     : SPJL-DS, SPDL-DS2");
+    uart_printf("VID          : %04X\r\n", Printer.getVid());
+    uart_printf("PID          : %04X\r\n", Printer.getPid());
+    uart_printf("Manufacturer : %s\r\n",   Printer.getManufacturer());
+    uart_printf("Product      : %s\r\n",   Printer.getProduct());
+    uart_printf("Serial       : %s\r\n",   Printer.getSerial());
+    uart_printf("Class        : %s\r\n",   Printer.getUsbClass());
+    uart_printf("Protocol     : %s\r\n",   Printer.getProtocol());
 }
 
 static void cmd_dump_pgm() {

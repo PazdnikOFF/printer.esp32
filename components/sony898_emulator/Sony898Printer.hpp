@@ -29,6 +29,16 @@ public:
     /* ── Configuration (set before init()) ─────────────────────────────── */
 
     /*
+     * USB device identity — all optional.
+     * 0 / nullptr → compile-time default from config.h (CFG_USB_*).
+     * Override for OEM or multi-model deployments.
+     */
+    uint16_t    vid          = 0;        /* USB Vendor  ID */
+    uint16_t    pid          = 0;        /* USB Product ID */
+    const char *manufacturer = nullptr;  /* iManufacturer string */
+    const char *product      = nullptr;  /* iProduct     string */
+
+    /*
      * Per-unit serial number.  nullptr = load from NVS, fallback to default.
      * Write to NVS with setSerial() at the factory, then leave nullptr here.
      */
@@ -50,6 +60,16 @@ public:
     void begin();
 
     /* ── Identity ───────────────────────────────────────────────────────── */
+
+    /* Active USB device identity — valid after init(). */
+    uint16_t    getVid()          const;
+    uint16_t    getPid()          const;
+    const char *getManufacturer() const;
+    const char *getProduct()      const;
+
+    /* Fixed protocol and USB class strings (model-defined, not per-unit). */
+    const char *getProtocol()     const;
+    const char *getUsbClass()     const;
 
     /* Active serial number (from NVS or field serial).  Valid after init(). */
     const char *getSerial() const;
